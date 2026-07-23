@@ -279,7 +279,7 @@ export default function App() {
   return (
     <main className="app-shell">
       <section className="studio">
-        <header className="brand"><span className="brand-mark">O</span><span>OpenDub</span></header>
+        <header className="brand"><span className="brand-mark">D</span><span>OpenDub</span></header>
         <motion.div className="intro" initial="hidden" animate="visible" variants={enter} transition={{ duration: .45 }}>
           <p className="kicker">INGLÊS → PORTUGUÊS</p>
           <h1>Seu vídeo em português,<br /><em>em poucos cliques.</em></h1>
