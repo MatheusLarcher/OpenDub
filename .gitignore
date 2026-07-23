@@ -1,0 +1,10 @@
+/backend/data/jobs
+*.pyc
+*.mp4
+*.log
+/.claude
+/frontend/node_modules
+/frontend/dist
+/frontend/release
+.env
+**/.env

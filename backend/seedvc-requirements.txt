@@ -1,0 +1,24 @@
+# Seed-VC usa ambiente isolado para nao conflitar com o Transformers do backend.
+# Torch/Torchaudio CUDA sao instalados antes deste arquivo pelo bootstrap Electron.
+accelerate
+scipy==1.13.1
+librosa==0.10.2
+huggingface-hub>=0.28.1
+munch==4.0.0
+einops==0.8.0
+descript-audio-codec==1.0.0
+pydub==0.25.1
+# webrtcvad-wheels: substitui o pacote "webrtcvad" (dependencia do resemblyzer abaixo) por um
+# fork com wheels pre-compiladas. O "webrtcvad" original nao publica wheel para Windows e exige
+# compilar na maquina do usuario (Visual C++ Build Tools), o que nao pode ser uma dependencia.
+webrtcvad-wheels==2.0.14
+jiwer==3.0.3
+transformers==4.46.3
+soundfile==0.12.1
+sounddevice==0.5.0
+modelscope==1.18.1
+funasr==1.1.5
+numpy==1.26.4
+hydra-core==1.3.2
+pyyaml
+python-dotenv

@@ -1,0 +1,9 @@
+services:
+  landing:
+    build: .
+    container_name: opendub-landing
+    restart: unless-stopped
+    ports:
+      - "5500:80"
+    volumes:
+      - ./downloads:/usr/share/nginx/html/downloads

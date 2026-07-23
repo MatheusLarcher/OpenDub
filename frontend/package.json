@@ -1,0 +1,67 @@
+{
+  "name": "opendub-frontend",
+  "version": "0.1.0",
+  "description": "OpenDub - Traduz e dubla vídeos do inglês para o português mantendo o vídeo original intacto.",
+  "author": "Matheus Larcher",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --port 5500 --host",
+    "electron:dev": "concurrently --kill-others-on-fail --success command-2 \"npm run dev\" \"wait-on http://localhost:5500 && cross-env VITE_DEV_SERVER_URL=http://localhost:5500 electron ./electron/main.cjs\"",
+    "build": "vite build",
+    "preview": "vite preview --port 5500 --host",
+    "dist": "npm run build && electron-builder --win"
+  },
+  "dependencies": {
+    "framer-motion": "^12.42.2",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.2.1",
+    "concurrently": "^9.1.0",
+    "cross-env": "^7.0.3",
+    "electron": "^30.0.0",
+    "electron-builder": "^24.13.3",
+    "vite": "^5.2.0",
+    "wait-on": "^7.2.0"
+  },
+  "main": "electron/main.cjs",
+  "build": {
+    "appId": "com.opendub.app",
+    "productName": "OpenDub",
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "build/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../backend",
+        "to": "backend",
+        "filter": [
+          "**/*",
+          "!data/**/*",
+          "!**/__pycache__/**/*",
+          "!.env"
+        ]
+      }
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "artifactName": "OpenDub-Setup-${version}.exe"
+    }
+  }
+}

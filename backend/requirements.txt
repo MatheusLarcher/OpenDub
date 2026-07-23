@@ -1,0 +1,19 @@
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+faster-whisper>=1.0.3
+python-multipart>=0.0.9
+python-dotenv>=1.0.1
+yt-dlp>=2024.3.10
+soundfile>=0.14.0
+silero-vad>=6.2.1
+librosa>=0.11.0
+accelerate>=0.30.0
+sentencepiece>=0.2.0
+tiktoken>=0.7.0
+deepfilternet==0.5.6
+transformers==4.57.1
+safetensors>=0.8.0
+
+# torch/torchaudio/torchcodec nao estao no PyPI padrao com suporte CUDA no Windows.
+# Instalar antes do resto com:
+#   pip install --index-url https://download.pytorch.org/whl/cu130 torch==2.9.1+cu130 torchaudio==2.9.1+cu130 torchcodec==0.15.0+cu130
