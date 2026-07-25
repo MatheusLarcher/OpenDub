@@ -4,7 +4,6 @@ import shutil
 import sys
 from threading import Lock
 from pathlib import Path
-from typing import Literal
 from urllib.parse import urlparse
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -46,8 +45,6 @@ class YoutubeRequest(BaseModel):
 
 class JobRequest(BaseModel):
     job_id: str
-    model_input: Literal["vocals", "original", "deepfilter_original"] = "deepfilter_original"
-    preserve_original_voice: bool = False
 
 
 class SubtitlesRequest(BaseModel):
@@ -202,11 +199,7 @@ def dub(payload: JobRequest):
         )
     try:
         _active_dub_job_id = payload.job_id
-        segments = dubbing_pipeline.run_dub(
-            payload.job_id,
-            model_input=payload.model_input,
-            preserve_original_voice=payload.preserve_original_voice,
-        )
+        segments = dubbing_pipeline.run_dub(payload.job_id)
     finally:
         _active_dub_job_id = None
         _dub_lock.release()
@@ -247,11 +240,8 @@ def generate_video(payload: JobRequest):
 
 @app.post("/subtitles/generate")
 def generate_subtitles(payload: SubtitlesRequest):
-    if not payload.confirm:
-        raise HTTPException(
-            status_code=400,
-            detail="Confirme o download do modelo de legenda (confirm=true) antes de gerar."
-        )
+    # A legenda nao baixa mais modelo nenhum: ela e montada com o que a dublagem ja
+    # reconheceu e traduziu. O campo `confirm` fica so por compatibilidade.
     from backend.services import subtitles
 
     segments = subtitles.generate_subtitles(payload.job_id)

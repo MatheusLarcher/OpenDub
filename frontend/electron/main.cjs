@@ -31,7 +31,6 @@ async function hasNvidiaDriver() {
 }
 
 async function startBackend(runtime, dataDir) {
-  const backendRoot = resourcePath("backend");
   backendProcess = spawn(runtime.python, ["-m", "uvicorn", "backend.main:app", "--host", "127.0.0.1", "--port", "5501"], {
     cwd: process.resourcesPath,
     windowsHide: true,
@@ -40,8 +39,9 @@ async function startBackend(runtime, dataDir) {
       PYTHONPATH: process.resourcesPath,
       PATH: `${path.dirname(runtime.python)};${path.join(path.dirname(runtime.python), "Library", "bin")};${process.env.PATH}`,
       OPENDUB_DATA_DIR: dataDir,
-      SEED_VC_DIR: runtime.seedDir,
-      SEED_VC_PYTHON: runtime.seedPython
+      // Reconhecimento de fala e geracao de voz rodam em ambientes proprios.
+      OPENDUB_ASR_PYTHON: runtime.asrPython,
+      OPENDUB_TTS_PYTHON: runtime.ttsPython
     }
   });
   backendProcess.on("exit", () => { backendProcess = undefined; });
@@ -120,7 +120,16 @@ app.whenReady().then(async () => {
     const runtimeDir = path.join(app.getPath("userData"), "runtime");
     const dataDir = path.join(app.getPath("userData"), "data");
     const runtime = await ensureRuntime({ runtimeDir, backendDir: resourcePath("backend"), report });
-    if (!await hasNvidiaDriver()) report("GPU NVIDIA não detectada", "O aplicativo funcionará, mas a dublagem será mais lenta sem CUDA.", 100);
+    // A dublagem depende de GPU: os modelos de fala rodam em CUDA. Avisar antes é melhor
+    // do que deixar o usuário esperar para falhar só quando clicar em "Dublar".
+    if (!await hasNvidiaDriver()) {
+      await dialog.showMessageBox({
+        type: "warning",
+        title: "Placa de vídeo não encontrada",
+        message: "Não encontramos uma placa de vídeo NVIDIA neste computador.",
+        detail: "O OpenDub abre normalmente, mas a dublagem precisa de uma placa NVIDIA para funcionar."
+      });
+    }
     report("Iniciando o estúdio", "Só mais um instante.", 100);
     await startBackend(runtime, dataDir);
     createWindow();

@@ -69,13 +69,8 @@ def dubbed_audio_path(job_id: str) -> Path:
     return job_dir(job_id) / "dubbed.wav"
 
 
-def seamless_audio_path(job_id: str) -> Path:
-    """Audio direto do Seamless antes da conversao para a voz de referencia."""
-    return job_dir(job_id) / "dubbed_seamless.wav"
-
-
 def voice_reference_path(job_id: str) -> Path:
-    """Trecho vocal limpo do proprio video usado pelo Seed-VC como referencia."""
+    """Trecho de fala do proprio video usado para clonar o timbre no TTS."""
     return job_dir(job_id) / "voice_reference.wav"
 
 

@@ -44,7 +44,6 @@ export default function App() {
   const [errorMessage, setErrorMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [dragging, setDragging] = useState(false);
-  const [preserveOriginalVoice, setPreserveOriginalVoice] = useState(Boolean(savedSession.preserveOriginalVoice));
   const [subtitleSegments, setSubtitleSegments] = useState([]);
   const [dubFakeProgress, setDubFakeProgress] = useState(0);
   const [videoFakeProgress, setVideoFakeProgress] = useState(0);
@@ -58,8 +57,8 @@ export default function App() {
       window.localStorage.removeItem(SESSION_KEY);
       return;
     }
-    window.localStorage.setItem(SESSION_KEY, JSON.stringify({ jobId, sourceType, preserveOriginalVoice }));
-  }, [jobId, sourceType, preserveOriginalVoice]);
+    window.localStorage.setItem(SESSION_KEY, JSON.stringify({ jobId, sourceType }));
+  }, [jobId, sourceType]);
 
   useEffect(() => {
     if (!window.app?.onVideoDownloadComplete) return;
@@ -230,7 +229,7 @@ export default function App() {
         const response = await fetch(`${API_BASE}/dub`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ job_id: jobId, model_input: "deepfilter_original", preserve_original_voice: preserveOriginalVoice })
+          body: JSON.stringify({ job_id: jobId })
         });
         if (!response.ok) throw new Error(await response.text());
         await response.json();
@@ -334,11 +333,7 @@ export default function App() {
           {sourceType === "youtube" && status.job === "done" && <motion.a className="original-download" href={downloads.original} initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }}>
             <span className="download-mini-icon">↓</span><span><strong>Baixar vídeo original</strong><small>O vídeo do YouTube já está pronto para baixar.</small></span><b>Baixar</b>
           </motion.a>}
-          <label className="voice-switch">
-            <input type="checkbox" checked={preserveOriginalVoice} disabled={busy || status.dub === "done"} onChange={(event) => setPreserveOriginalVoice(event.target.checked)} />
-            <span className="switch-track" />
-            <span><strong>Manter entonação original</strong><small>Usa a voz do vídeo como referência. Pode demorar mais.</small></span>
-          </label>
+          <div className="voice-note"><span className="voice-note-icon">♪</span><span><strong>A voz do vídeo é mantida</strong><small>A dublagem usa a própria voz da pessoa como referência.</small></span></div>
           {!videoReady && <button className="primary-button" onClick={dubVideo} disabled={busy || status.job !== "done"}>{busy ? <><motion.i className="button-spinner" animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: .8, ease: "linear" }} /> {label}</> : <>{label}<span>→</span></>}</button>}
           {busy && <motion.div className="processing" initial={{ opacity: 0 }} animate={{ opacity: 1 }}><i /><span>{status.dub === "loading" ? "Traduzindo, limpando e recriando a voz. Isso pode levar alguns minutos." : "Não feche esta página. Seu progresso será recuperado ao voltar."}</span></motion.div>}
         </motion.section>}</AnimatePresence>

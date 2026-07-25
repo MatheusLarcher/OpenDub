@@ -5,161 +5,182 @@ from typing import Dict, List
 
 import torch
 
-from backend.services import jobs, media, s2st, separation, vad
+from backend.services import asr, jobs, media, separation, translation, tts, vad
 
 # Ate quanto a voz dublada pode acelerar (preservando tom) pra caber antes da proxima
 # fala comecar, sem NUNCA sobrepor ou cortar. Video nunca e retimado -- cortes/musica
 # ficam exatamente onde estavam no original; so a voz se ajusta.
 MAX_DUB_SPEEDUP = float(os.getenv("MAX_DUB_SPEEDUP", "1.3"))
-# Cada lote e enviado em uma unica chamada ao SeamlessM4T. Quatro blocos de ate 16 s
-# mantem uma boa margem de VRAM e elimina boa parte do overhead por chamada.
-SEAMLESS_BATCH_SIZE = max(1, int(os.getenv("SEAMLESS_BATCH_SIZE", "4")))
+# Trecho do proprio video usado como referencia para clonar a voz. O Chatterbox
+# condiciona bem com ~10 s; alem disso nao melhora e so custa memoria.
+REFERENCE_MAX_SECONDS = 12.0
+REFERENCE_MIN_SECONDS = 3.0
+MIN_SPEECH_SAMPLES_RATIO = 0.15
+# Sobra tolerada antes de considerar que a fala invadiu a proxima.
+OVERLAP_TOLERANCE_S = 0.02
 
 
-def run_dub(
-    job_id: str,
-    model_input: str = "deepfilter_original",
-    preserve_original_voice: bool = False,
-) -> List[Dict]:
-    """Roda o pipeline completo: extrai audio, separa vocal/instrumental, detecta blocos
-    de fala por VAD e traduz cada bloco com o SeamlessM4T v2 (eng->por). Monta
-    dubbed.wav posicionando cada bloco no MESMO timestamp original (vídeo nunca e
-    retimado -- so a voz e ajustada, acelerando levemente quando precisa caber antes da
-    proxima fala comecar).
+def _write_reference(job_id: str, clean_wav, chunks: List[vad.Chunk]):
+    """Recorta o trecho de fala mais longo como referencia de timbre.
+
+    Usamos o audio limpo pelo DeepFilterNet, nao a voz separada pelo Demucs: em teste,
+    a separacao deixa artefatos que o clonador reproduz junto.
     """
-    vocals_path, instrumental_path = separation.separate(job_id)
-    # A separacao e pesada em VRAM; libera antes de carregar o SeamlessM4T v2.
+    candidates = [c for c in chunks if c["end"] - c["start"] >= REFERENCE_MIN_SECONDS]
+    if not candidates:
+        candidates = list(chunks)
+    if not candidates:
+        raise RuntimeError("nenhum trecho de fala encontrado para clonar a voz")
+    best = max(candidates, key=lambda c: c["end"] - c["start"])
+    end = min(best["end"], best["start"] + REFERENCE_MAX_SECONDS)
+    reference = vad.slice_audio(clean_wav, best["start"], end)
+    path = jobs.voice_reference_path(job_id)
+    media.write_wav(path, reference[None, :], vad.VAD_SAMPLE_RATE)
+    return path, best
+
+
+def run_dub(job_id: str, preserve_original_voice: bool = True) -> List[Dict]:
+    """Dubla o video em cascata: reconhece a fala, traduz e recria a voz.
+
+    Cada bloco volta para o MESMO timestamp em que a pessoa falou no original. O video
+    nunca e retimado; quando a frase em portugues fica mais longa que a janela, so a
+    voz acelera um pouco (tom preservado), ate o teto de MAX_DUB_SPEEDUP.
+
+    ``preserve_original_voice`` existe por compatibilidade: a clonagem agora e nativa
+    do TTS e sempre ativa.
+    """
+    vocals_path, _instrumental_path = separation.separate(job_id)
+    # A separacao e pesada em VRAM e nada depois dela precisa do Demucs carregado.
     separation.unload_model()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
-    vocals_wav_16k = vad.load_16k_mono(vocals_path)
-    if model_input == "original":
-        model_wav_16k = vad.load_16k_mono(jobs.raw_audio_path(job_id))
-        chunks = vad.get_chunks(vocals_wav_16k)
-    elif model_input == "deepfilter_original":
-        from backend.services import denoise
+    from backend.services import denoise
 
-        model_wav_16k = vad.load_16k_mono(denoise.clean_original(job_id))
-        # A deteccao e feita DEPOIS da limpeza, pois e exatamente este sinal que sera
-        # enviado ao Seamless. Assim ruido removido nao vira uma falsa regiao de fala.
-        chunks = vad.get_chunks(model_wav_16k)
-    elif model_input == "vocals":
-        model_wav_16k = vocals_wav_16k
-        chunks = vad.get_chunks(vocals_wav_16k)
-    else:
-        raise ValueError(f"model_input invalido: {model_input}")
-    total_duration = model_wav_16k.shape[-1] / vad.VAD_SAMPLE_RATE
+    clean_wav = vad.load_16k_mono(denoise.clean_original(job_id))
+    # A deteccao roda DEPOIS da limpeza: ruido removido nao vira falsa regiao de fala.
+    chunks = vad.get_chunks(clean_wav)
+    total_duration = clean_wav.shape[-1] / vad.VAD_SAMPLE_RATE
 
-    output_sample_rate = s2st.output_sample_rate()
-    total_samples = int(total_duration * output_sample_rate)
-    buffer = torch.zeros(total_samples, dtype=torch.float32)
-    dub_segments: List[Dict] = []
-
-    prepared_chunks = []
+    segments_dir = jobs.job_dir(job_id) / "fala_original"
+    segments_dir.mkdir(exist_ok=True)
+    prepared: List[Dict] = []
     for chunk in chunks:
-        audio = vad.slice_audio(model_wav_16k, chunk["start"], chunk["end"])
+        audio = vad.slice_audio(clean_wav, chunk["start"], chunk["end"])
         original_samples = audio.numel()
-        if model_input == "deepfilter_original":
-            audio = vad.remove_silence(audio)
-        if audio.numel() < int(0.15 * vad.VAD_SAMPLE_RATE):
+        audio = vad.remove_silence(audio)
+        if audio.numel() < int(MIN_SPEECH_SAMPLES_RATIO * vad.VAD_SAMPLE_RATE):
             print(f"[dub] trecho {chunk['start']:.1f}s-{chunk['end']:.1f}s ignorado: sem fala")
             continue
-        prepared_chunks.append(
+        path = segments_dir / f"bloco_{len(prepared):03d}.wav"
+        media.write_wav(path, audio[None, :], vad.VAD_SAMPLE_RATE)
+        prepared.append(
             {
                 "chunk": chunk,
-                "audio": audio.numpy(),
+                "path": path,
                 "input_ms": audio.numel() / vad.VAD_SAMPLE_RATE * 1000.0,
-                "silence_removed_ms": (original_samples - audio.numel()) / vad.VAD_SAMPLE_RATE * 1000.0,
+                "silence_removed_ms": (original_samples - audio.numel())
+                / vad.VAD_SAMPLE_RATE
+                * 1000.0,
             }
         )
 
-    chunks = [item["chunk"] for item in prepared_chunks]
-    for batch_start in range(0, len(prepared_chunks), SEAMLESS_BATCH_SIZE):
-        batch_items = prepared_chunks[batch_start : batch_start + SEAMLESS_BATCH_SIZE]
-        batch_chunks = [item["chunk"] for item in batch_items]
-        batch_audio = [item["audio"] for item in batch_items]
-        translated_batch, translated_sr = s2st.translate_chunks(
-            batch_audio, sample_rate=vad.VAD_SAMPLE_RATE
+    if not prepared:
+        raise RuntimeError("nenhuma fala encontrada no video")
+
+    reference_path, _reference_chunk = _write_reference(job_id, clean_wav, [i["chunk"] for i in prepared])
+
+    print(f"[dub] transcrevendo {len(prepared)} blocos de fala")
+    transcricoes = asr.transcribe_segments(job_id, [item["path"] for item in prepared])
+
+    # A janela de cada bloco vai do inicio dele ate o inicio do proximo: e o espaco
+    # real disponivel para falar sem atropelar a fala seguinte.
+    janelas: List[float] = []
+    for index, item in enumerate(prepared):
+        start = item["chunk"]["start"]
+        next_start = (
+            prepared[index + 1]["chunk"]["start"] if index + 1 < len(prepared) else total_duration
         )
-        if translated_sr != output_sample_rate:
-            raise RuntimeError(
-                f"Sample rate inesperado do SeamlessM4T: {translated_sr} (esperado {output_sample_rate})"
-            )
+        janelas.append(max(0.0, next_start - start))
 
-        print(
-            f"[dub] lote {batch_start // SEAMLESS_BATCH_SIZE + 1}/"
-            f"{(len(chunks) + SEAMLESS_BATCH_SIZE - 1) // SEAMLESS_BATCH_SIZE} "
-            f"({len(batch_chunks)} blocos) traduzido"
-        )
-
-        for batch_index, (item, translated) in enumerate(zip(batch_items, translated_batch)):
-            index = batch_start + batch_index
-            chunk = item["chunk"]
-            start, end = chunk["start"], chunk["end"]
-            next_start = chunks[index + 1]["start"] if index + 1 < len(chunks) else total_duration
-            available_window_s = max(0.0, next_start - start)
-
-            translated_duration_s = len(translated) / output_sample_rate
-            speed_applied = 1.0
-            overlapped = False
-            if available_window_s > 0 and translated_duration_s > available_window_s:
-                needed_speed = translated_duration_s / available_window_s
-                speed_applied = min(needed_speed, MAX_DUB_SPEEDUP)
-                translated = media.time_stretch(translated, speed_applied)
-                translated_duration_s = len(translated) / output_sample_rate
-                if translated_duration_s > available_window_s:
-                    overlapped = True
-                    print(
-                        f"[dub] AVISO: bloco {index + 1}/{len(chunks)} ainda nao coube mesmo "
-                        f"acelerado {speed_applied:.2f}x -- vai sobrepor levemente a proxima fala"
-                    )
-
-            print(
-                f"[dub] bloco {index + 1}/{len(chunks)} ({start:.1f}s-{end:.1f}s) traduzido"
-                + (f", acelerado {speed_applied:.2f}x" if speed_applied > 1.001 else "")
-            )
-
-            start_sample = int(start * output_sample_rate)
-            translated_tensor = torch.from_numpy(translated)
-            end_sample = min(total_samples, start_sample + len(translated_tensor))
-            usable_len = end_sample - start_sample
-            if usable_len > 0:
-                buffer[start_sample:end_sample] += translated_tensor[:usable_len]
-
-            dub_segments.append(
-                {
-                    "index": index,
-                    "start": start,
-                    "end": end,
-                    "translated_ms": translated_duration_s * 1000.0,
-                    "available_window_ms": available_window_s * 1000.0,
-                    "speed_applied": speed_applied,
-                    "overlapped": overlapped,
-                    "input_ms": item["input_ms"],
-                    "silence_removed_ms": item["silence_removed_ms"],
-                }
-            )
-
-    seamless_output = (
-        jobs.seamless_audio_path(job_id) if preserve_original_voice else jobs.dubbed_audio_path(job_id)
+    print("[dub] traduzindo para portugues")
+    traducoes = translation.translate_blocks(
+        [
+            {"text": transcricoes[index]["text"], "window_s": janelas[index]}
+            for index in range(len(prepared))
+        ]
     )
-    media.write_wav(seamless_output, buffer[None, :], output_sample_rate)
-    jobs.save_json(jobs.dub_segments_path(job_id), dub_segments)
-
-    s2st.unload_model()
+    translation.unload_model()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
-    if preserve_original_voice:
-        from backend.services import voice_conversion
+    print("[dub] gerando a voz em portugues")
+    vozes = tts.synthesize_blocks(job_id, reference_path, traducoes)
 
-        print("[dub] convertendo o timbre para a voz original com Seed-VC")
-        voice_conversion.convert_to_original_voice(
-            job_id,
-            source=seamless_output,
-            chunks=chunks,
-            output_sample_rate=output_sample_rate,
+    sample_rate = next(
+        (item["sample_rate"] for item in vozes if item["path"] and item["sample_rate"]), 24000
+    )
+    total_samples = int(total_duration * sample_rate)
+    buffer = torch.zeros(total_samples, dtype=torch.float32)
+    dub_segments: List[Dict] = []
+
+    for index, item in enumerate(prepared):
+        chunk = item["chunk"]
+        start, end = chunk["start"], chunk["end"]
+        janela = janelas[index]
+        voz = vozes[index]
+        speed_applied = 1.0
+        overlapped = False
+        duracao_s = 0.0
+
+        if voz["path"]:
+            wave, wave_sr = media.read_wav(voz["path"])
+            if wave.shape[0] > 1:
+                wave = wave.mean(dim=0, keepdim=True)
+            audio = wave[0].numpy()
+            if wave_sr != sample_rate:
+                import librosa
+
+                audio = librosa.resample(audio, orig_sr=wave_sr, target_sr=sample_rate)
+            duracao_s = len(audio) / sample_rate
+            if janela > 0 and duracao_s > janela:
+                speed_applied = min(duracao_s / janela, MAX_DUB_SPEEDUP)
+                audio = media.time_stretch(audio, speed_applied)
+                duracao_s = len(audio) / sample_rate
+                # O phase vocoder devolve alguns milissegundos a mais que o alvo; sem uma
+                # tolerancia, todo bloco acelerado seria marcado como sobreposto.
+                if duracao_s > janela + OVERLAP_TOLERANCE_S:
+                    overlapped = True
+                    print(
+                        f"[dub] AVISO: bloco {index + 1}/{len(prepared)} nao coube mesmo "
+                        f"acelerado {speed_applied:.2f}x -- vai sobrepor levemente"
+                    )
+            start_sample = int(start * sample_rate)
+            end_sample = min(total_samples, start_sample + len(audio))
+            usable = end_sample - start_sample
+            if usable > 0:
+                buffer[start_sample:end_sample] += torch.from_numpy(audio[:usable])
+
+        dub_segments.append(
+            {
+                "index": index,
+                "start": start,
+                "end": end,
+                "text_en": transcricoes[index]["text"],
+                "text_pt": traducoes[index],
+                "translated_ms": duracao_s * 1000.0,
+                "available_window_ms": janela * 1000.0,
+                "speed_applied": speed_applied,
+                "overlapped": overlapped,
+                "fidelidade": voz["fidelidade"],
+                "tentativas": voz["tentativas"],
+                "input_ms": item["input_ms"],
+                "silence_removed_ms": item["silence_removed_ms"],
+            }
         )
 
+    media.write_wav(jobs.dubbed_audio_path(job_id), buffer[None, :], sample_rate)
+    jobs.save_json(jobs.dub_segments_path(job_id), dub_segments)
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
     return dub_segments

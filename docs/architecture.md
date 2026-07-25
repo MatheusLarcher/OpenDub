@@ -26,9 +26,9 @@ principal antes de a janela da interface abrir.
 2. Clique em **Continuar**. A pagina cria um job e guarda seu ID no `localStorage`.
 3. Para YouTube, assim que o download termina aparece **Baixar video original**; nao
    e preciso iniciar a dublagem para ter acesso a esse arquivo.
-4. Escolha, se quiser, **Manter entonacao original**. Essa opcao ativa Seed-VC e
-   aumenta o tempo de processamento.
-5. Clique em **Dublar meu video**. A interface mostra as etapas Adicionar, Preparar,
+4. Clique em **Dublar meu video**. A voz do proprio video e sempre usada como
+   referencia: nao ha opcao a escolher.
+5. A interface acompanha o progresso. A interface mostra as etapas Adicionar, Preparar,
    Dublar e Finalizar, bloqueando botoes duplicados enquanto ha uma requisicao ativa.
 6. Ao terminar, baixe video dublado, video original e legenda `.srt` (a legenda e
    solicitada separadamente).
@@ -62,11 +62,12 @@ importantes sao:
 - `vocals.wav` e `instrumental.wav`: separacao do HDemucs;
 - `cleaned_original_48k_mono.wav`: original limpo pelo DeepFilterNet;
 - `dub_segments.json`: blocos, timestamps e metricas de silencio;
-- `dubbed_seamless.wav`: resultado STS antes do Seed-VC;
-- `voice_reference.wav`: maior trecho vocal usado pelo Seed-VC;
+- `fala_original/`: blocos de fala enviados ao reconhecimento;
+- `voice_reference.wav`: trecho usado para clonar o timbre no TTS;
+- `tts_blocks/`: tomadas de voz geradas por bloco;
+- `workers/`: pedidos, respostas e logs dos ambientes de ASR e TTS;
 - `dubbed.wav` e `dubbed.mp4`: resultados finais;
-- `subtitles.srt` e `transcript.txt`: legenda e transcricao, quando solicitadas;
-- `seed_vc.log`: stdout/stderr da conversao de voz, quando habilitada.
+- `subtitles.srt` e `transcript.txt`: legenda e transcricao em portugues.
 
 ## Pipeline de audio e video
 
@@ -74,21 +75,21 @@ importantes sao:
    para o diretorio do job.
 2. **Extracao.** FFmpeg gera audio estereo de trabalho.
 3. **Separacao.** `torchaudio.pipelines.HDEMUCS_HIGH_MUSDB_PLUS` gera voz e
-   instrumental. O modelo e removido da GPU antes do Seamless.
+   instrumental. O modelo e removido da GPU antes da etapa seguinte.
 4. **Reducao de ruido.** DeepFilterNet3 limpa o mix original; o sinal limpo, e nao o
    trecho com silencio bruto, e a entrada da deteccao de voz.
 5. **VAD e recorte.** Silero VAD encontra falas; outro passe remove pausas internas
    >=100 ms, preservando 30 ms de margem. Trechos de fala menores que 150 ms sao
    ignorados.
-6. **Traducao STS.** SeamlessM4T v2 large recebe ingles em 16 kHz e gera portugues.
-   Quatro blocos podem ser processados em lote, com padding/mascara corretos. A geracao
-   usa penalidade de repeticao e bloqueio de n-gramas para reduzir alucinacoes em loop.
-7. **Timeline.** Cada fala dublada retorna ao `start` original. Se exceder a janela
+6. **Reconhecimento.** Parakeet TDT 0.6B v3 transcreve cada bloco com tempo por token.
+7. **Traducao.** Qwen3 4B (4 bits) traduz para pt-BR dentro do orcamento de caracteres
+   derivado da janela de tempo do bloco.
+8. **Voz.** Chatterbox Multilingual V3 (pack pt-BR) gera a fala clonando a voz do video.
+   Cada tomada e transcrita de volta pelo Parakeet e comparada com o texto pedido; abaixo
+   de 80% de fidelidade o bloco e refeito com outra seed.
+9. **Timeline.** Cada fala dublada retorna ao `start` original. Se exceder a janela
    antes da proxima fala, so a voz e acelerada, no maximo 1,3x.
-8. **Voz opcional.** Seed-VC recebe o portugues do Seamless e a referencia vocal do
-   video. O timbre e convertido sem recorrer a TTS; o numero final de amostras e
-   normalizado para o mesmo tamanho da saida Seamless.
-9. **Mux.** FFmpeg mistura instrumental e voz, copia o stream de video com `-c:v copy`
+10. **Mux.** FFmpeg mistura instrumental e voz, copia o stream de video com `-c:v copy`
    e usa `-shortest`. O video nao e recortado ou acelerado.
 
 ## Bibliotecas e componentes
@@ -101,17 +102,19 @@ importantes sao:
 | `yt-dlp` | Download do video atual do YouTube. |
 | FFmpeg/FFprobe | Extracao, mixagem, mux e duracoes. |
 | PyTorch 2.9.1 CUDA 13.0, Torchaudio e TorchCodec | Execucao de modelos/GPU e HDemucs. |
-| Transformers 4.57.1 e Safetensors | SeamlessM4T v2 large. |
+| Transformers 4.57.1 e Safetensors | Traducao com Qwen3 4B. |
+| bitsandbytes | Carrega o Qwen3 4B em 4 bits, para caber em 8 GB de VRAM. |
 | DeepFilterNet 0.5.6 | Reducao de ruido. |
 | Silero VAD | Deteccao de fala e remocao de pausas. |
 | Librosa, SoundFile, NumPy | Leitura, escrita, resample e ajuste de audio. |
-| Faster-Whisper | Legenda/transcricao opcional. |
-| Seed-VC | Conversao opcional para aproximar o timbre original. |
+| Parakeet TDT 0.6B v3 | Reconhecimento de fala e conferencia das tomadas de voz. |
+| Chatterbox Multilingual V3 (pt-BR) | Geracao da voz dublada com clonagem. |
 
-O backend principal usa Python 3.11. Seed-VC fica em Python 3.10 separado, pois usa
-Transformers 4.46.3 e dependencias proprias (`accelerate`, `scipy`, `munch`, `einops`,
-`descript-audio-codec`, `resemblyzer`, `modelscope`, `funasr`, `hydra-core` e outras
-listadas em `backend/seedvc-requirements.txt`).
+O backend principal usa Python 3.11. O reconhecimento de fala e a geracao de voz exigem
+versoes incompativeis do Transformers (`>=5.10` e `==5.2.0`), entao cada um roda em um
+venv criado sobre o ambiente principal com `--system-site-packages`: os tres compartilham
+o mesmo torch/CUDA e cada satelite custa algumas centenas de MB. A comunicacao com esses
+ambientes e por arquivo JSON, em `backend/scripts/asr_worker.py` e `tts_worker.py`.
 
 ### Frontend e desktop
 
@@ -128,22 +131,26 @@ listadas em `backend/seedvc-requirements.txt`).
 ```dotenv
 # Dublagem
 MAX_CHUNK_DURATION_S=16
-SEAMLESS_BATCH_SIZE=4
-SEAMLESS_TEXT_REPETITION_PENALTY=1.2
-SEAMLESS_TEXT_NO_REPEAT_NGRAM_SIZE=3
 SPEECH_ONLY_MIN_SILENCE_MS=100
 SPEECH_ONLY_PAD_MS=30
 MAX_DUB_SPEEDUP=1.3
 INSTRUMENTAL_GAIN_DB=-4
 
-# Seed-VC opcional
-SEED_VC_DIR=C:\caminho\seed-vc
-SEED_VC_PYTHON=C:\caminho\envs\seedvc\python.exe
-SEED_VC_STEPS=30
+# Traducao
+OPENDUB_LLM_MODEL=Qwen/Qwen3-4B-Instruct-2507
+OPENDUB_CHARS_PER_SECOND=14
+
+# Geracao de voz
+OPENDUB_TTS_MIN_FIDELIDADE=0.80
+OPENDUB_TTS_MAX_TENTATIVAS=3
+
+# Ambientes de ASR e TTS (preenchidos pelo aplicativo)
+OPENDUB_ASR_PYTHON=...untimesr\Scripts\python.exe
+OPENDUB_TTS_PYTHON=...untime	ts\Scripts\python.exe
 ```
 
-`SEED_VC_PYTHON` e preferivel a `conda run` no Windows: o backend chama o
-`python.exe` diretamente e evita falhas de `conda activate` em processo filho.
+O backend chama o `python.exe` de cada ambiente diretamente, em vez de `conda run`: no
+Windows a ativacao do Conda falha quando a API nao foi iniciada por um shell Conda.
 
 ## Executar, construir e distribuir
 
@@ -167,12 +174,14 @@ cd ..
 
 O NSIS e criado em `frontend/release`. O instalador contem frontend, Electron e fontes
 do backend, mas nao os modelos nem Python. Na primeira abertura ele baixa Miniforge,
-cria os ambientes `backend` e `seedvc`, instala FFmpeg/Torch/dependencias e inicia a
-API. Modelos e checkpoints sao baixados na primeira utilizacao e reutilizados em cache.
+cria o ambiente `backend` e os satelites `asr` e `tts`, instala FFmpeg/Torch/dependencias
+e inicia a API. Modelos e checkpoints sao baixados na primeira utilizacao e reutilizados
+em cache. Os marcadores de "ja instalei" guardam o hash do que foi instalado, entao um
+update que mude dependencias dispara a reinstalacao sozinho.
 
 O bootstrap nao instala driver NVIDIA: o driver precisa ser instalado pelo usuario com
-o instalador oficial e permissao administrativa. Sem `nvidia-smi`, o aplicativo abre,
-mas a dublagem tende a cair para CPU e ficar muito mais lenta.
+o instalador oficial e permissao administrativa. Sem `nvidia-smi`, o aplicativo abre e
+avisa na hora que a dublagem nao vai funcionar — os modelos de fala dependem de CUDA.
 
 ## Validacao recomendada
 

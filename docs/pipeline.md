@@ -2,9 +2,24 @@
 
 ## Objetivo
 
-Traduzir fala inglesa diretamente para fala portuguesa, preservando entonacao na
-medida suportada pelo modelo e sem alterar a velocidade, os cortes ou o codec do video
-original. O pipeline de dublagem nao depende de transcricao nem de TTS.
+Traduzir a fala inglesa para portugues brasileiro na propria voz da pessoa do video, sem
+alterar a velocidade, os cortes ou o codec do video original.
+
+## Como funciona
+
+Ate julho de 2026 a dublagem era feita por um unico modelo fala->fala (SeamlessM4T v2),
+que devolvia uma voz sintetica fixa em 16 kHz; o Seed-VC entrava depois, opcionalmente,
+para aproximar o timbre original. Hoje o caminho e uma cascata de tres etapas:
+
+| Etapa | Modelo | Licenca |
+|---|---|---|
+| Reconhecer a fala | `nvidia/parakeet-tdt-0.6b-v3` | CC-BY-4.0 |
+| Traduzir | `Qwen/Qwen3-4B-Instruct-2507` (4 bits) | Apache-2.0 |
+| Gerar a voz | Chatterbox Multilingual V3, pack pt-BR | MIT |
+
+A clonagem passou a ser nativa do TTS: nao existe mais opcao de "manter entonacao
+original", porque a voz do video e sempre a referencia. A saida subiu de 16 kHz para
+24 kHz.
 
 ## Etapas
 
@@ -23,34 +38,22 @@ marcados como `source_type: upload`.
 O navegador guarda o ID do job ativo. Depois de F5 ou de reabrir a pagina, ele consulta
 `GET /jobs/{job_id}/status`, restaura os blocos e arquivos ja prontos e continua exibindo
 uma dublagem que ainda esta em andamento. Se a dublagem ja terminou, `POST /dub` reutiliza
-o audio e `dub_segments.json` existentes, sem baixar ou traduzir novamente; basta retomar
-a montagem do video que faltar.
+o audio e `dub_segments.json` existentes.
 
 ### Extracao e separacao
 
-O FFmpeg extrai `raw_44k_stereo.wav`. O HDemucs gera:
+O FFmpeg extrai `raw_44k_stereo.wav`. O HDemucs gera `vocals.wav` e `instrumental.wav`
+(este ultimo entra na mixagem final). O modelo de separacao e descarregado da GPU antes
+da etapa seguinte.
 
-- `vocals.wav`, usado como referencia limpa de locutor e apoio de separacao;
-- `instrumental.wav`, usado na mixagem final.
+### Limpeza e deteccao de fala
 
-O modelo de separacao e descarregado da GPU antes de carregar o SeamlessM4T.
-
-### Limpeza e silencio
-
-O caminho padrao de entrada e `deepfilter_original`:
-
-1. DeepFilterNet3 limpa o audio original e grava
-   `cleaned_original_48k_mono.wav`;
+1. DeepFilterNet3 limpa o audio original e grava `cleaned_original_48k_mono.wav`;
 2. o audio e convertido para mono/16 kHz;
-3. Silero VAD detecta os blocos no sinal depois da limpeza;
+3. Silero VAD detecta os blocos no sinal ja limpo;
 4. dentro de cada bloco, um segundo VAD remove pausas a partir de 100 ms, mantendo
-   30 ms de margem para evitar cortar consoantes;
+   30 ms de margem para nao cortar consoantes;
 5. blocos com menos de 150 ms de fala sao descartados.
-
-Os campos `input_ms` e `silence_removed_ms` em `dub_segments.json` registram quanto
-audio foi efetivamente enviado ao Seamless.
-
-Variaveis:
 
 ```dotenv
 MAX_CHUNK_DURATION_S=16
@@ -58,92 +61,146 @@ SPEECH_ONLY_MIN_SILENCE_MS=100
 SPEECH_ONLY_PAD_MS=30
 ```
 
-### SeamlessM4T v2
+### Referencia de voz
 
-Modelo padrao: `facebook/seamless-m4t-v2-large`, entrada inglesa a 16 kHz e saida
-portuguesa. Ate quatro blocos de tamanhos diferentes sao enviados na mesma chamada,
-com padding e mascara de atencao produzidos pelo processor.
+O trecho de fala mais longo (ate 12 s) vira `voice_reference.wav` e condiciona o TTS.
+Ele e recortado do audio limpo pelo DeepFilterNet, **nao** do `vocals.wav` separado pelo
+Demucs: a separacao deixa artefatos que o clonador reproduz junto.
 
-O decodificador do Seamless pode entrar em loops ao encontrar termos tecnicos ou
-trechos ambiguos. Os testes reproduziram repeticoes mesmo com um bloco por chamada,
-provando que o batch nao era a causa. O pipeline aplica os controles nativos do
-decodificador de texto:
+### Reconhecimento (Parakeet TDT)
+
+Cada bloco e transcrito com tempo por token. O modelo ocupa cerca de 1,3 GB de VRAM e
+transcreve 15 s de audio em torno de 2 s.
+
+### Traducao com orcamento de tempo (Qwen3 4B)
+
+A traducao precisa caber no tempo em que a pessoa falou: frase longa demais obriga a
+acelerar a voz ou invade a fala seguinte. O modelo recebe a janela do bloco convertida em
+um orcamento de caracteres (`OPENDUB_CHARS_PER_SECOND`, padrao 14) e reescreve mais curto
+quando estoura.
+
+Dois detalhes que vieram de falhas reais:
+
+- **acentuacao e obrigatoria** — o pack pt-BR do Chatterbox e baseado em grafemas; com
+  "voce" e "nao" sem acento ele emudece ou corta a frase;
+- **numeros sao expandidos por extenso no codigo**, nao so pedidos no prompt, porque o
+  modelo ignorava a regra e deixava "10" no texto.
 
 ```dotenv
-SEAMLESS_TEXT_REPETITION_PENALTY=1.2
-SEAMLESS_TEXT_NO_REPEAT_NGRAM_SIZE=3
-SEAMLESS_BATCH_SIZE=4
+OPENDUB_LLM_MODEL=Qwen/Qwen3-4B-Instruct-2507
+OPENDUB_CHARS_PER_SECOND=14
 ```
 
-Esses parametros eliminaram, no trecho de regressao, os loops de frases como
-"game em formato de PC/Android" e "nao entendo o que isso quer dizer". Eles evitam a
-repeticao, mas nao garantem traducao perfeita de nomes tecnicos.
+O modelo e carregado em 4 bits: em bf16 ele sozinho ocupa os 8 GB de uma placa de entrada
+e nao sobra espaco para o cache de atencao.
+
+### Geracao da voz (Chatterbox pt-BR) e conferencia
+
+Cada bloco e sintetizado com a voz do video como referencia. Textos acima de 120
+caracteres sao fatiados por frase e concatenados: em texto longo o modelo perde o fio
+(medido: 3% de fidelidade com 133 caracteres de uma vez).
+
+O modelo colapsa de vez em quando — devolve quase silencio, ou uma frase corrompida com
+duracao plausivel. Checar so a duracao nao pega o segundo caso: uma tomada de 6,8 s
+(esperado ~10 s) falou "eu vou te contar porque eu estimular". Por isso **cada tomada e
+transcrita de volta pelo Parakeet e comparada com o texto pedido**; abaixo do limite de
+fidelidade, o bloco e refeito com outra seed. Tomadas boas ficam em torno de 98% e as
+ruins em 51% ou menos, entao o corte padrao e 80%.
+
+Interjeicoes ("Ei", "Ha") nao dao material para o ASR comparar e sao avaliadas so por ter
+saido som.
+
+```dotenv
+OPENDUB_TTS_MIN_FIDELIDADE=0.80
+OPENDUB_TTS_MAX_TENTATIVAS=3
+```
+
+`cfg_weight` fica fixo em 0.5. Reduzir acelera cerca de 23%, mas truncou a frase em todas
+as tomadas medidas (51% de fidelidade).
 
 ### Timeline e video
 
-Cada saida volta ao `start` original do bloco. Se ultrapassar a janela ate a proxima
-fala, somente a voz e acelerada com phase vocoder, limitada por `MAX_DUB_SPEEDUP`
-(padrao `1.3`). O video nao e recortado ou retimado.
+Cada bloco volta ao `start` original. Se ultrapassar a janela ate a proxima fala, somente
+a voz e acelerada com phase vocoder, limitada por `MAX_DUB_SPEEDUP` (padrao `1.3`). O
+video nunca e recortado ou retimado.
 
-Na geracao final:
+Na geracao final o stream de video e copiado com `-c:v copy`, instrumental e voz sao
+misturados (`INSTRUMENTAL_GAIN_DB`, padrao `-4`) e `-shortest` impede que o container
+ultrapasse a duracao do video.
 
-- o stream de video e copiado com `-c:v copy`;
-- instrumental e voz dublada sao misturados;
-- `INSTRUMENTAL_GAIN_DB` vale `-4` por padrao;
-- `-shortest` impede que o container ultrapasse a duracao do video.
+### Legenda
 
-### Conversao opcional de voz
+A legenda nao roda modelo nenhum: ela e montada com o que a dublagem ja reconheceu e
+traduziu. Sai em portugues, na hora. Antes disso, um Whisper proprio transcrevia o audio
+original de novo — mais um modelo para baixar, mais de um minuto de espera e a legenda
+saia em ingles.
 
-Com `preserve_original_voice=true`, o Seamless grava primeiro
-`dubbed_seamless.wav`. O maior trecho de fala do vocal separado (maximo de 15 s) vira
-`voice_reference.wav`. O Seed-VC converte o timbre e o backend normaliza sample rate e
-numero de amostras antes de gravar `dubbed.wav`.
+## Ambientes Python
 
-O Seed-VC roda em processo e ambiente Conda separados para nao conflitar com as
-dependencias do Seamless/DeepFilterNet. O runner local usa SoundFile para salvar WAV,
-evitando a exigencia de DLLs compartilhadas do FFmpeg pelo TorchCodec no Windows.
-O backend chama o `python.exe` desse ambiente diretamente, sem `conda run`, pois a
-ativacao do Conda pode falhar quando a API foi iniciada fora de um shell Conda. Se o
-ambiente estiver em outro local, `SEED_VC_PYTHON` no `backend/.env` permite informar
-o caminho exato do executavel.
+O Parakeet TDT exige `transformers >= 5.10` e o Chatterbox fixa `transformers == 5.2.0`.
+Nao existe versao que atenda aos dois, entao cada um roda em um venv proprio criado sobre
+o ambiente principal com `--system-site-packages`: os tres compartilham o mesmo torch/CUDA
+e cada satelite custa algumas centenas de MB em vez de outra stack CUDA inteira.
+
+O backend chama o `python.exe` de cada ambiente diretamente, sem `conda run`, e conversa
+com eles por arquivo JSON (`backend/scripts/asr_worker.py` e `tts_worker.py`).
+
+```dotenv
+OPENDUB_ASR_PYTHON=...\runtime\asr\Scripts\python.exe
+OPENDUB_TTS_PYTHON=...\runtime\tts\Scripts\python.exe
+```
 
 ## Arquivos gerados por job
 
 - `raw_44k_stereo.wav`: audio extraido;
 - `vocals.wav` e `instrumental.wav`: stems do HDemucs;
 - `cleaned_original_48k_mono.wav`: saida do DeepFilterNet;
-- `dub_segments.json`: timestamps e metricas dos blocos;
-- `dubbed_seamless.wav`: intermediario quando Seed-VC esta ativo;
-- `voice_reference.wav`: referencia para conversao de voz;
-- `dubbed.wav`: voz final;
+- `fala_original/bloco_NNN.wav`: blocos de fala enviados ao reconhecimento;
+- `voice_reference.wav`: trecho usado para clonar o timbre;
+- `tts_blocks/`: tomadas geradas por bloco;
+- `workers/`: pedidos, respostas e logs dos ambientes de ASR e TTS;
+- `dub_segments.json`: tempos, texto em ingles e portugues, fidelidade e tentativas;
+- `dubbed.wav`: voz final (24 kHz);
 - `dubbed.mp4`: video final;
-- `subtitles.srt` e `transcript.txt`: legenda e transcricao (idioma original), geradas sob
-  demanda pelo botao "Gerar legenda".
+- `subtitles.srt` e `transcript.txt`: legenda e transcricao em portugues.
 
 ## Inicializacao pelo aplicativo Electron
 
-O instalador Electron distribui somente a interface e o codigo do backend. Na primeira
-abertura, o bootstrap cria uma instalacao Miniforge por usuario e dois ambientes locais:
-`backend` (Python 3.11, FFmpeg e pipeline STS) e `seedvc` (Python 3.10, isolado para
-evitar conflito de versoes do Transformers). O backend e iniciado internamente em
-`127.0.0.1:5501` e a interface so e aberta depois que a rota `/openapi.json` responde.
+O instalador distribui somente a interface e o codigo do backend. Na primeira abertura o
+bootstrap cria uma instalacao Miniforge por usuario, o ambiente `backend` (Python 3.11 e
+FFmpeg) e os dois satelites `asr` e `tts`. O backend sobe em `127.0.0.1:5501` e a
+interface so abre depois que `/openapi.json` responde.
 
-O diretorio de dados e fornecido por `OPENDUB_DATA_DIR`, portanto jobs e arquivos do
-usuario nunca sao gravados dentro de `resources`, que fica somente leitura no aplicativo
-instalado. O bootstrap baixa os pesos de cada modelo sob demanda. Driver NVIDIA permanece
-um requisito externo: a aplicacao apenas detecta sua ausencia; nao tenta instalar driver
-ou alterar configuracoes do Windows.
+Os marcadores `.backend-ready`, `.asr-ready` e `.tts-ready` guardam o **hash** do que foi
+instalado, nao um simples "ok". Antes, uma maquina que ja tinha aberto uma versao anterior
+mantinha o marcador antigo e o bootstrap pulava o `pip install` inteiro — o app subia com
+as dependencias do update passado. Com o hash, mudar `requirements.txt` ou a lista de
+pacotes de um satelite dispara a reinstalacao sozinha.
 
-## Evidencia de regressao
+O bootstrap tambem apaga o ambiente do Seed-VC quando encontra sobra de versoes anteriores
+(cerca de 3,7 GB com uma stack CUDA inteira que nada mais usa).
 
-No job curto usado durante o desenvolvimento:
+O diretorio de dados vem de `OPENDUB_DATA_DIR`, entao jobs e arquivos do usuario nunca sao
+gravados dentro de `resources`, que fica somente leitura no aplicativo instalado. Driver
+NVIDIA continua sendo requisito externo, e agora a ausencia dele e avisada na abertura: a
+dublagem depende de CUDA.
 
-- o original tinha 25,000000 s;
-- o video dublado tinha 25,000000 s;
-- o audio processado preservou 25,007938 s;
-- DeepFilter + VAD + STS funcionaram pela rota HTTP real;
-- a protecao antirrepeticao removeu os dois loops reproduzidos;
-- Seed-VC executou na RTX 5050 Laptop com CUDA 13.0 e preservou o numero final de
-  amostras.
+## Medicoes de referencia
 
-Esses numeros sao evidencia do arquivo de regressao, nao uma garantia para todo video.
+Clipe de 15 s, RTX 5050 Laptop (8 GB), modelos ja baixados:
+
+| Etapa | Tempo |
+|---|---|
+| Extrair audio | 0,1 s |
+| Separar (Demucs) | 4,4 s |
+| Limpar (DeepFilterNet) | 1,8 s |
+| Detectar fala (VAD) | 0,4 s |
+| Reconhecer (Parakeet) | ~2 s |
+| Traduzir (Qwen3 4B) | ~4 s |
+| Gerar voz + conferir | ~100 s |
+| Montar o video | 0,3 s |
+| **Total pela interface** | **~126 s** |
+
+O TTS domina o custo. Fidelidade das tomadas nesse job: 100%, 100% e 93%.
+
+Sao numeros do arquivo de regressao, nao garantia para todo video.

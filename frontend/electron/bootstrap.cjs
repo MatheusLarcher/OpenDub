@@ -1,13 +1,44 @@
 const { spawn } = require("child_process");
 const fs = require("fs/promises");
 const fssync = require("fs");
+const crypto = require("crypto");
 const https = require("https");
 const path = require("path");
 
 const MINIFORGE_URL = "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Windows-x86_64.exe";
-const SEED_VC_URL = "https://github.com/Plachtaa/seed-vc/archive/refs/heads/main.zip";
 const TORCH_INDEX = "https://download.pytorch.org/whl/cu130";
 const TORCH_PACKAGES = ["torch==2.9.1+cu130", "torchaudio==2.9.1+cu130", "torchcodec==0.15.0+cu130"];
+
+// O reconhecimento de fala e a geracao de voz exigem versoes incompativeis do
+// transformers (>=5.10 e ==5.2.0). Cada um roda em um venv proprio criado sobre o
+// ambiente principal com --system-site-packages: assim os dois reaproveitam o mesmo
+// torch/CUDA e cada venv custa poucas centenas de MB em vez de outro CUDA inteiro.
+const SATELLITES = [
+  {
+    id: "asr",
+    dir: "asr",
+    label: "reconhecimento de fala",
+    packages: ["transformers>=5.10", "huggingface_hub>=1.0", "soundfile", "librosa"]
+  },
+  {
+    id: "tts",
+    dir: "tts",
+    label: "geração de voz",
+    packages: [
+      "transformers==5.2.0",
+      "chatterbox-tts==0.1.7 --no-deps",
+      "s3tokenizer",
+      "diffusers==0.29.0",
+      "conformer==0.3.2",
+      "resemble-perth",
+      "pyloudnorm",
+      "omegaconf",
+      "safetensors",
+      "soundfile",
+      "librosa==0.11.0"
+    ]
+  }
+];
 
 // Percentual acumulado (0-100) no inicio de cada etapa do bootstrap, usado para desenhar a barra de progresso.
 const PROGRESS = {
@@ -15,9 +46,7 @@ const PROGRESS = {
   installRuntime: 5,
   createBackendEnv: 8,
   installBackendDeps: 12,
-  createSeedVcEnv: 52,
-  downloadSeedVc: 55,
-  installSeedVcDeps: 57,
+  createSatellites: 62,
   done: 100
 };
 
@@ -67,6 +96,17 @@ function download(url, target, onProgress) {
   });
 }
 
+// O marcador guarda a impressao digital do que foi instalado. Antes ele era so um
+// "ja instalei": numa maquina que ja tinha rodado uma versao anterior, o bootstrap
+// pulava o pip install e o app subia com as dependencias velhas do update passado.
+async function readMarker(file) {
+  try { return (await fs.readFile(file, "utf8")).trim(); } catch { return null; }
+}
+
+function fingerprint(parts) {
+  return crypto.createHash("sha256").update(parts.join("\n")).digest("hex").slice(0, 16);
+}
+
 async function ensureMiniforge(runtimeDir, report) {
   const root = path.join(runtimeDir, "miniforge3");
   const conda = path.join(root, "Scripts", "conda.exe");
@@ -92,46 +132,68 @@ async function ensureEnvironment(conda, prefix, version, report, percent) {
 
 async function pip(python, args) { await run(python, ["-m", "pip", ...args]); }
 
-async function ensureSeedVc(runtimeDir, conda, backendDir, report) {
-  const seedDir = path.join(runtimeDir, "seed-vc");
-  const seedPython = await ensureEnvironment(conda, path.join(runtimeDir, "seedvc"), "3.10", report, PROGRESS.createSeedVcEnv);
-  if (!exists(path.join(seedDir, "inference.py"))) {
-    const onDownloadProgress = reportRange(report, "Baixando dependências", "Necessária para manter a entonação original.", PROGRESS.downloadSeedVc, PROGRESS.installSeedVcDeps);
-    const archive = path.join(runtimeDir, "seed-vc.zip");
-    await download(SEED_VC_URL, archive, onDownloadProgress);
-    await run("powershell.exe", ["-NoProfile", "-Command", `Expand-Archive -LiteralPath '${archive.replace(/'/g, "''")}' -DestinationPath '${runtimeDir.replace(/'/g, "''")}' -Force; Move-Item -LiteralPath '${path.join(runtimeDir, "seed-vc-main").replace(/'/g, "''")}' -Destination '${seedDir.replace(/'/g, "''")}'`]);
-    await fs.rm(archive, { force: true });
+// Cada satelite herda o torch do ambiente principal (--system-site-packages) e so
+// instala por cima o que precisa em versao propria.
+async function ensureSatellite(mainPython, runtimeDir, satellite, report, percent) {
+  const prefix = path.join(runtimeDir, satellite.dir);
+  const python = path.join(prefix, "Scripts", "python.exe");
+  const marker = path.join(runtimeDir, `.${satellite.id}-ready`);
+  const expected = fingerprint(satellite.packages);
+  if (exists(python) && (await readMarker(marker)) === expected) return python;
+
+  report("Instalando dependências", `Preparando o componente de ${satellite.label}.`, percent);
+  if (!exists(python)) {
+    await run(mainPython, ["-m", "venv", "--system-site-packages", prefix]);
   }
-  const marker = path.join(runtimeDir, ".seedvc-ready");
-  if (!exists(marker)) {
-    report("Instalando dependências", "A opção de manter a entonação ficará pronta em seguida.", PROGRESS.installSeedVcDeps);
-    await pip(seedPython, ["install", "--upgrade", "pip"]);
-    await pip(seedPython, ["install", "--index-url", TORCH_INDEX, ...TORCH_PACKAGES]);
-    await pip(seedPython, ["install", "-r", path.join(backendDir, "seedvc-requirements.txt")]);
-    // resemblyzer depende do pacote "webrtcvad" (sem wheel para Windows). O requirements.txt ja
-    // instalou o fork "webrtcvad-wheels", que fornece o mesmo modulo Python; instalar resemblyzer
-    // com --no-deps evita que o pip tente buscar/compilar o "webrtcvad" original por cima.
-    await pip(seedPython, ["install", "--no-deps", "resemblyzer==0.1.4"]);
-    await fs.writeFile(marker, "ok\n");
+  await pip(python, ["install", "--upgrade", "pip"]);
+  for (const entry of satellite.packages) {
+    await pip(python, ["install", ...entry.split(" ")]);
   }
-  return { seedDir, seedPython };
+  await fs.writeFile(marker, expected);
+  return python;
+}
+
+// O Seed-VC saiu do produto quando a clonagem passou a ser nativa do TTS. Quem ja tinha
+// aberto uma versao anterior ficou com um ambiente conda inteiro (com CUDA) parado no
+// disco, mais o repositorio clonado -- alguns GB que nada mais usa.
+async function removeSeedVcLeftovers(runtimeDir) {
+  for (const leftover of ["seedvc", "seed-vc", ".seedvc-ready"]) {
+    await fs.rm(path.join(runtimeDir, leftover), { recursive: true, force: true }).catch(() => {});
+  }
 }
 
 async function ensureRuntime({ runtimeDir, backendDir, report }) {
   const conda = await ensureMiniforge(runtimeDir, report);
+  await removeSeedVcLeftovers(runtimeDir);
   const python = await ensureEnvironment(conda, path.join(runtimeDir, "backend"), "3.11", report, PROGRESS.createBackendEnv);
-  const marker = path.join(runtimeDir, ".backend-ready");
-  if (!exists(marker)) {
+
+  const requirementsPath = path.join(backendDir, "requirements.txt");
+  const requirements = await fs.readFile(requirementsPath, "utf8");
+  const backendMarker = path.join(runtimeDir, ".backend-ready");
+  const backendExpected = fingerprint([requirements, ...TORCH_PACKAGES, TORCH_INDEX]);
+  if ((await readMarker(backendMarker)) !== backendExpected) {
     report("Instalando dependências", "Esta é a etapa mais longa da primeira abertura.", PROGRESS.installBackendDeps);
     await run(conda, ["install", "--prefix", path.join(runtimeDir, "backend"), "-c", "conda-forge", "ffmpeg", "-y"]);
     await pip(python, ["install", "--upgrade", "pip"]);
     await pip(python, ["install", "--index-url", TORCH_INDEX, ...TORCH_PACKAGES]);
-    await pip(python, ["install", "-r", path.join(backendDir, "requirements.txt")]);
-    await fs.writeFile(marker, "ok\n");
+    await pip(python, ["install", "-r", requirementsPath]);
+    await fs.writeFile(backendMarker, backendExpected);
   }
-  const seed = await ensureSeedVc(runtimeDir, conda, backendDir, report);
+
+  const satellites = {};
+  const span = (PROGRESS.done - PROGRESS.createSatellites) / SATELLITES.length;
+  for (const [index, satellite] of SATELLITES.entries()) {
+    satellites[satellite.id] = await ensureSatellite(
+      python,
+      runtimeDir,
+      satellite,
+      report,
+      Math.round(PROGRESS.createSatellites + index * span)
+    );
+  }
+
   report("Tudo pronto", "Iniciando o aplicativo.", PROGRESS.done);
-  return { python, ...seed };
+  return { python, asrPython: satellites.asr, ttsPython: satellites.tts };
 }
 
 module.exports = { ensureRuntime, run };
