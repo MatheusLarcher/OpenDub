@@ -74,12 +74,11 @@ function createWindow() {
     return { action: "deny" };
   });
 
-  // So rastreamos o download do video dublado (usado pelo botao "Abrir video"); os
-  // outros downloads (legenda, video original) seguem o fluxo padrao do Electron.
-  // Escolhemos o caminho explicitamente (em vez de deixar o Electron decidir) porque,
-  // sem isso, o download fica pendurado esperando uma decisao que nunca chega.
+  // TODO download precisa de um caminho explicito: sem item.setSavePath() o Electron
+  // fica esperando uma decisao que nunca chega e o arquivo trava na pasta Downloads
+  // como um .tmp de nome aleatorio -- foi o que acontecia com a legenda, a transcricao
+  // e o video original, que antes caiam no fluxo padrao.
   win.webContents.session.on("will-download", (_event, item) => {
-    if (!item.getURL().includes("/export/video/")) return;
     const downloadsDir = app.getPath("downloads");
     const ext = path.extname(item.getFilename());
     const base = path.basename(item.getFilename(), ext);
@@ -90,8 +89,12 @@ function createWindow() {
       counter += 1;
     }
     item.setSavePath(target);
+    // O botao "Abrir video" so vale para o video dublado.
+    const isDubbedVideo = item.getURL().includes("/export/video/");
     item.once("done", (_doneEvent, state) => {
-      if (state === "completed") win.webContents.send("video-download-complete", item.getSavePath());
+      if (state === "completed" && isDubbedVideo && !win.isDestroyed()) {
+        win.webContents.send("video-download-complete", item.getSavePath());
+      }
     });
   });
 
@@ -133,7 +136,19 @@ app.whenReady().then(async () => {
   });
 });
 
+// O backend e um processo separado: se ele sobrevive ao app, fica ocupando a porta 5501 e
+// a proxima abertura acha que "subiu" mas conversa com a versao velha. Encerramos nos dois
+// eventos porque window-all-closed nao dispara quando o app e fechado por outro caminho.
+const stopBackend = () => {
+  if (!backendProcess) return;
+  const current = backendProcess;
+  backendProcess = undefined;
+  current.kill();
+};
+
+app.on("before-quit", stopBackend);
+
 app.on("window-all-closed", () => {
-  backendProcess?.kill();
+  stopBackend();
   if (process.platform !== "darwin") app.quit();
 });

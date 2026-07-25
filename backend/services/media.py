@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import List, Tuple
 
@@ -26,11 +27,18 @@ def run_ffmpeg(command: List[str]) -> None:
     try:
         subprocess.run(command, check=True, capture_output=True, text=True)
     except subprocess.CalledProcessError as exc:
-        detail = "Falha ao executar ffmpeg."
+        # O erro tecnico vai para o log; o usuario recebe algo que ele consegue agir sobre.
+        # Antes o texto cru do ffmpeg ("Invalid data found when processing input") subia
+        # direto para a tela.
         if exc.stderr:
-            tail = exc.stderr.strip().splitlines()[-1]
-            detail = f"{detail} {tail}"
-        raise HTTPException(status_code=500, detail=detail) from exc
+            print(f"[opendub] ffmpeg falhou: {exc.stderr.strip()}", file=sys.stderr)
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Nao foi possivel processar esse video. O arquivo pode estar corrompido "
+                "ou em um formato que nao conseguimos abrir."
+            )
+        ) from exc
 
 
 def read_wav(path: Path) -> Tuple[torch.Tensor, int]:

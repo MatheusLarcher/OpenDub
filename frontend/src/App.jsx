@@ -4,6 +4,10 @@ import { AnimatePresence, motion } from "framer-motion";
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:5501";
 const SESSION_KEY = "dublar-video:active-job";
 const initialStatus = { job: "idle", dub: "idle", video: "idle", subtitles: "idle" };
+const VIDEO_EXTENSIONS = [
+  ".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v", ".mpg", ".mpeg",
+  ".wmv", ".flv", ".ts", ".m2ts", ".3gp", ".ogv"
+];
 const enter = { hidden: { opacity: 0, y: 16 }, visible: { opacity: 1, y: 0 } };
 
 function loadSavedSession() {
@@ -145,6 +149,11 @@ export default function App() {
     setErrorMessage("");
     setDubbedVideoPath(null);
     setVideoOpened(false);
+    // Sem limpar aqui, a transcricao e o arquivo do video anterior ficavam no estado e
+    // podiam reaparecer no proximo video.
+    setSubtitleSegments([]);
+    setUploadFile(null);
+    setYoutubeUrl("");
   };
 
   const openDubbedVideo = async () => {
@@ -159,7 +168,12 @@ export default function App() {
 
   const chooseFile = (file) => {
     if (!file) return;
-    if (!file.type.startsWith("video/")) {
+    // O Windows nem sempre informa o tipo do arquivo (.mkv, .ts e afins costumam vir com
+    // file.type vazio), entao a extensao serve de segunda chance antes de recusar.
+    const looksLikeVideo = file.type
+      ? file.type.startsWith("video/")
+      : VIDEO_EXTENSIONS.some((extension) => file.name.toLowerCase().endsWith(extension));
+    if (!looksLikeVideo) {
       setErrorMessage("Escolha um arquivo de vídeo.");
       return;
     }

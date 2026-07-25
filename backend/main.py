@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import shutil
 import sys
 from threading import Lock
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlparse
 
 BASE_DIR = Path(__file__).resolve().parent
 # Rodar `python backend/main.py` diretamente (fora do uvicorn com app_dir) nao coloca a
@@ -53,74 +55,129 @@ class SubtitlesRequest(BaseModel):
     confirm: bool = False
 
 
+VIDEO_SUFFIXES = {
+    ".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v", ".mpg", ".mpeg",
+    ".wmv", ".flv", ".ts", ".m2ts", ".3gp", ".ogv",
+}
+
+
+def _discard_job_folder(job_folder: Path) -> None:
+    """Um job que nunca chegou a ter midia nao deve deixar pasta para tras."""
+    shutil.rmtree(job_folder, ignore_errors=True)
+
+
 @app.post("/process/youtube")
 def process_youtube(payload: YoutubeRequest):
-    job_id, job_folder = jobs.create_job()
-    try:
-        from backend.baixar_youtube import baixar_video
-    except ModuleNotFoundError as exc:
-        if exc.name not in {"backend", "backend.baixar_youtube"}:
-            raise HTTPException(
-                status_code=500,
-                detail=(
-                    "Falha ao importar backend/baixar_youtube.py. "
-                    f"Dependencia ausente: {exc.name}. Instale o requirements.txt."
-                )
-            ) from exc
-        try:
-            from backend.scripts.baixar_youtube import baixar_video
-        except Exception as exc2:  # pragma: no cover
-            raise HTTPException(
-                status_code=500,
-                detail=(
-                    "Script baixar_youtube.py nao encontrado. Coloque o arquivo em "
-                    "backend/baixar_youtube.py ou backend/scripts/baixar_youtube.py"
-                )
-            ) from exc2
-    except Exception as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=(
-                "Falha ao importar backend/baixar_youtube.py. "
-                f"Erro: {exc}"
-            )
-        ) from exc
-    from yt_dlp.utils import YoutubeDLError
-
-    try:
-        result = baixar_video([payload.url], str(job_folder))
-    except YoutubeDLError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=(
-                "Nao foi possivel baixar esse video do YouTube agora (o YouTube "
-                "recusou o pedido). Tente novamente em alguns minutos ou baixe o "
-                "video manualmente e envie o arquivo pelo botao de upload."
-            )
-        ) from exc
-    if isinstance(result, (list, tuple)) and result:
-        media_file = Path(result[0])
-    else:
-        media_file = Path(result)
-    if not media_file.exists():
-        raise HTTPException(status_code=400, detail="Download do YouTube falhou")
-    if media_file.suffix.lower() not in {".mp4", ".mov", ".mkv", ".webm"}:
+    parsed = urlparse(payload.url.strip())
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise HTTPException(
             status_code=400,
-            detail="Arquivo baixado nao contem video. Verifique o link e o formato."
+            detail=(
+                "Esse link nao parece ser de um video. Copie o endereco completo do "
+                "video (comecando com https://) e cole aqui."
+            )
         )
+    job_id, job_folder = jobs.create_job()
+    try:
+        try:
+            from backend.baixar_youtube import baixar_video
+        except ModuleNotFoundError as exc:
+            if exc.name in {"backend", "backend.baixar_youtube"}:
+                from backend.scripts.baixar_youtube import baixar_video
+            else:
+                raise
+        from yt_dlp.utils import DownloadError, YoutubeDLError
+
+        try:
+            result = baixar_video([payload.url], str(job_folder))
+        except YoutubeDLError as exc:
+            # Nem toda falha e culpa do YouTube: link invalido, video privado ou removido
+            # tem causa e solucao diferentes, e mandar "tente em alguns minutos" nesses
+            # casos so faz o usuario repetir algo que nunca vai funcionar.
+            message = str(exc).lower()
+            if isinstance(exc, DownloadError) and (
+                "unsupported url" in message or "is not a valid url" in message
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Esse link nao e de um video que sabemos baixar. Use o endereco "
+                        "de um video do YouTube ou envie o arquivo pelo botao de upload."
+                    )
+                ) from exc
+            if any(
+                marker in message
+                for marker in ("private video", "video unavailable", "removed", "does not exist")
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Esse video nao esta disponivel (pode ser privado, restrito ou ter "
+                        "sido removido). Tente outro link ou envie o arquivo pelo upload."
+                    )
+                ) from exc
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "Nao foi possivel baixar esse video do YouTube agora (o YouTube "
+                    "recusou o pedido). Tente novamente em alguns minutos ou baixe o "
+                    "video manualmente e envie o arquivo pelo botao de upload."
+                )
+            ) from exc
+
+        if isinstance(result, (list, tuple)) and result:
+            media_file = Path(result[0])
+        else:
+            media_file = Path(result)
+        if not media_file.exists():
+            raise HTTPException(
+                status_code=400,
+                detail="O download desse video nao foi concluido. Tente novamente."
+            )
+        if media_file.suffix.lower() not in VIDEO_SUFFIXES:
+            raise HTTPException(
+                status_code=400,
+                detail="O arquivo baixado nao contem video. Confira o link e tente de novo."
+            )
+    except HTTPException:
+        _discard_job_folder(job_folder)
+        raise
+    except Exception as exc:
+        _discard_job_folder(job_folder)
+        print(f"[opendub] falha inesperada ao baixar do YouTube: {exc!r}", file=sys.stderr)
+        raise HTTPException(
+            status_code=500,
+            detail="Nao foi possivel preparar esse video. Tente novamente."
+        ) from exc
     jobs.save_job_meta(job_id, {"media_path": str(media_file), "source_type": "youtube"})
     return {"job_id": job_id, "media_path": str(media_file), "source_type": "youtube"}
 
 
 @app.post("/process/upload")
 async def process_upload(file: UploadFile = File(...)):
+    suffix = Path(file.filename or "").suffix.lower()
+    # Antes qualquer arquivo era aceito e a falha só aparecia no meio da dublagem, com uma
+    # mensagem crua do ffmpeg. Melhor recusar na hora, com o motivo em portugues.
+    if suffix not in VIDEO_SUFFIXES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Esse arquivo nao e um video que sabemos abrir. Envie um video "
+                "(mp4, mov, mkv, webm, avi...)."
+            )
+        )
     job_id, job_folder = jobs.create_job()
-    suffix = Path(file.filename).suffix or ".mp4"
     target_path = job_folder / f"upload{suffix}"
-    with target_path.open("wb") as handle:
-        import shutil
-        shutil.copyfileobj(file.file, handle)
+    try:
+        with target_path.open("wb") as handle:
+            shutil.copyfileobj(file.file, handle)
+    except Exception as exc:
+        _discard_job_folder(job_folder)
+        print(f"[opendub] falha ao gravar o upload: {exc!r}", file=sys.stderr)
+        raise HTTPException(
+            status_code=500,
+            detail="Nao foi possivel salvar esse video. Confira o espaco em disco e tente de novo."
+        ) from exc
     jobs.save_job_meta(job_id, {"media_path": str(target_path), "source_type": "upload"})
     return {"job_id": job_id, "media_path": str(target_path), "source_type": "upload"}
 
@@ -161,7 +218,11 @@ def job_status(job_id: str):
     """Estado recuperavel de um job; usado pela pagina depois de F5/reabertura."""
     global _active_dub_job_id
     meta = jobs.load_job_meta(job_id)
-    media_exists = jobs.resolve_media_path(job_id).exists()
+    # Nao usar resolve_media_path aqui: ela levanta 404 quando o arquivo original saiu do
+    # lugar, e o front trata 404 como "esse job nao existe mais" e apaga a sessao -- o
+    # usuario perdia o acesso ao video ja dublado por causa do arquivo de origem.
+    media_path = meta.get("media_path")
+    media_exists = bool(media_path) and Path(media_path).exists()
     segments_path = jobs.dub_segments_path(job_id)
     segments = jobs.load_json(segments_path) if segments_path.exists() else []
     return {
