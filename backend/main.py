@@ -25,9 +25,9 @@ load_dotenv(BASE_DIR / ".env")
 
 app = FastAPI(title="OpenDub")
 
-# Os modelos de separacao, VAD, DeepFilterNet e SeamlessM4T sao mantidos em memoria
-# pelo processo. Eles nao podem ser carregados/descarregados por duas requisicoes ao
-# mesmo tempo: alem de duplicar VRAM, isso pode derrubar o worker do Uvicorn.
+# Separacao, VAD, DeepFilterNet e o modelo de traducao ficam em memoria no processo, e
+# os ambientes de reconhecimento e de voz disputam a mesma GPU. Duas dublagens ao mesmo
+# tempo duplicariam a VRAM e podem derrubar o worker do Uvicorn, entao so roda uma.
 _dub_lock = Lock()
 _active_dub_job_id: str | None = None
 

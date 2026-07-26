@@ -45,10 +45,13 @@ def load_16k_mono(path: Path) -> torch.Tensor:
 def get_chunks(wav: torch.Tensor, pad_s: float = PAD_S) -> List[Chunk]:
     """Detecta trechos de fala num tensor mono 16kHz ja carregado (ver load_16k_mono).
 
-    Devolve blocos com padding simetrico, sem sobreposicao. min_silence_duration_ms
-    generoso mantem pausas curtas DENTRO de um bloco, o que evita duplicar essa pausa
-    depois (o SeamlessM4T ja preserva a pausa proporcional no audio gerado para aquele
-    bloco).
+    Estes blocos sao a unidade de trabalho de todo o pipeline: cada um e transcrito,
+    traduzido e falado de novo, e o `start` dele e o instante em que a voz dublada volta
+    na linha do tempo -- e por isso que o video nunca precisa ser retimado.
+
+    Blocos saem com padding simetrico e sem sobreposicao. Um min_silence_duration_ms
+    generoso agrupa a frase inteira num bloco so, em vez de picar em pedacos curtos:
+    frase completa da contexto para a traducao e evita uma chamada de modelo por palavra.
     """
     model = get_model()
     timestamps = get_speech_timestamps(
@@ -81,8 +84,8 @@ def slice_audio(wav: torch.Tensor, start: float, end: float, sample_rate: int = 
 def remove_silence(wav: torch.Tensor) -> torch.Tensor:
     """Concatena somente as regioes de fala detectadas em um trecho ja limpo.
 
-    Este segundo VAD e mais sensivel que o usado para formar blocos: pausas a partir
-    de 100 ms sao removidas antes do envio ao SeamlessM4T. Um padding curto evita
+    Este segundo VAD e mais sensivel que o usado para formar blocos: pausas a partir de
+    100 ms saem antes de o bloco ir para o reconhecimento de fala. Um padding curto evita
     cortar consoantes no inicio/fim das palavras.
     """
     timestamps = get_speech_timestamps(

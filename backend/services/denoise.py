@@ -86,11 +86,10 @@ def _enhance_long(model, state, waveform: torch.Tensor, sample_rate: int) -> tor
 
 
 def clean_original(job_id: str) -> Path:
-    """Limpa o mix original com DeepFilterNet antes da traducao S2ST.
+    """Limpa o mix original com DeepFilterNet antes de detectar e reconhecer a fala.
 
-    O arquivo limpo e mono 48 kHz (taxa nativa do DeepFilterNet3); o VAD/Seamless
-    fazem a conversao para 16 kHz no passo seguinte. O instrumental separado segue
-    intacto para a mixagem final.
+    O arquivo limpo e mono 48 kHz (taxa nativa do DeepFilterNet3); o VAD converte para
+    16 kHz no passo seguinte. O instrumental separado segue intacto para a mixagem final.
     """
     output = jobs.cleaned_original_path(job_id)
     if output.exists():
