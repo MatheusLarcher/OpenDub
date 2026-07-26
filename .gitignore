@@ -9,3 +9,7 @@
 .env
 **/.env
 *.exe
+# O instalador servido pela landing page e a excecao: ele precisa estar versionado para o
+# deploy automatico (que publica por git pull) levar a versao nova para a producao.
+# Os builds em /frontend/release continuam ignorados pela regra da pasta acima.
+!/landing/downloads/OpenDub-Setup.exe
