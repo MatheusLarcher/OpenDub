@@ -218,7 +218,9 @@ dublagem depende de CUDA.
 
 ## Medicoes de referencia
 
-Clipe de 15 s, RTX 5050 Laptop (8 GB), modelos ja baixados:
+Todas em uma RTX 5050 Laptop (8 GB), com os modelos ja baixados.
+
+Custo por etapa, clipe de 15 s no modo padrao:
 
 | Etapa | Tempo |
 |---|---|
@@ -232,6 +234,20 @@ Clipe de 15 s, RTX 5050 Laptop (8 GB), modelos ja baixados:
 | Montar o video | 0,3 s |
 | **Total pela interface** | **~126 s** |
 
-O TTS domina o custo. Fidelidade das tomadas nesse job: 100%, 100% e 93%.
+Gerar a voz domina o custo — e e exatamente a etapa que o modo rapido substitui.
 
-Sao numeros do arquivo de regressao, nao garantia para todo video.
+Os dois modos, mesmo clipe de 45 s:
+
+| Modo | Tempo |
+|---|---|
+| Na voz do video | 191,6 s |
+| Rapido | 72,2 s |
+
+Video mais longo, 3 min de um tutorial real, modo padrao: 353 s, 42 blocos, nenhum
+bloco mudo, fidelidade media de 83%. Os blocos abaixo do corte vinham de fala
+bilingue (ingles misturado com tagalog), que o reconhecimento ja entrega embaralhada.
+
+A limpeza de ruido escala bem depois do fatiamento: 22,7 min de audio em 19 s, com
+pico de 0,28 GB de VRAM.
+
+Sao numeros dos arquivos de regressao, nao garantia para todo video.

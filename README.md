@@ -13,20 +13,37 @@ para uma visão geral, demonstração em vídeo e o link de download.
 
 - Traduz a fala do inglês para o português mantendo o vídeo original intacto: os
   cortes, a música e os efeitos continuam exatamente onde estavam.
-- A voz dublada é sintética (não é a voz original clonada), mas dá pra ativar a opção
-  **Manter entonação original** pra aproximar o timbre da voz de quem fala no vídeo.
-- Também gera, se você quiser, a legenda (`.srt`) e a transcrição em texto puro
-  (`.txt`) do áudio original.
+- **A dublagem sai na voz da própria pessoa do vídeo** — o aplicativo usa a voz dela
+  como referência, então não é aquela voz de robô.
+- Também gera a legenda (`.srt`) e a transcrição (`.txt`) **em português**.
+
+## Os dois modos
+
+Na hora de dublar você escolhe:
+
+| | Na voz do vídeo | Rápido |
+| --- | --- | --- |
+| Como fica a voz | a voz da pessoa do vídeo | uma voz sintética |
+| Quanto demora | mais devagar | cerca de 3x mais rápido |
+
+O primeiro vem marcado por padrão. O modo rápido ajuda quando o vídeo é longo e você
+quer o resultado logo. A legenda sai igual nos dois.
 
 ## Como usar
 
 1. Abra o aplicativo.
 2. Cole o link de um vídeo do YouTube **ou** arraste/escolha um vídeo do seu
    computador.
-3. Clique em **Continuar** e depois em **Dublar meu vídeo**.
-4. Espere a barra de progresso terminar (pode levar alguns minutos, dependendo do
-   tamanho do vídeo e do seu computador).
-5. Baixe o vídeo dublado. Se quiser, gere e baixe também a legenda ou a transcrição.
+3. Clique em **Continuar**.
+4. Escolha o modo e clique em **Dublar meu vídeo**.
+5. Espere a barra de progresso terminar. Como referência: um vídeo de 3 minutos levou
+   cerca de 6 minutos na voz do vídeo, num computador com placa de vídeo de entrada.
+6. Baixe o vídeo dublado. A legenda pode ser gerada e baixada assim que a dublagem
+   termina, e o vídeo original fica disponível desde o começo.
+
+Os arquivos baixados usam o nome do seu vídeo: `meu video.mp4` (original),
+`meu video_dublado.mp4` e `meu video.srt`. Como a legenda tem o mesmo nome do vídeo, a
+maioria dos players a reconhece sozinha.
 
 Você pode fechar e reabrir o aplicativo no meio do processo: ele lembra do vídeo que
 estava sendo dublado e retoma de onde parou.
@@ -35,8 +52,10 @@ estava sendo dublado e retoma de onde parou.
 
 Baixe o instalador na aba [Releases](../../releases) deste repositório e execute-o.
 Na primeira abertura, o próprio aplicativo baixa o que precisa pra funcionar (isso
-pode demorar alguns minutos e consumir alguns GB — só acontece uma vez). Uma GPU
-NVIDIA é recomendada; sem ela o aplicativo funciona, só que mais devagar.
+pode demorar alguns minutos e consumir alguns GB — só acontece uma vez).
+
+**É necessária uma placa de vídeo NVIDIA.** Os modelos que reconhecem e recriam a fala
+só rodam nela; sem placa o aplicativo abre e avisa, mas a dublagem não funciona.
 
 ## Quer entender por dentro?
 

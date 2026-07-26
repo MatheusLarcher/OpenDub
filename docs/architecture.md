@@ -43,19 +43,27 @@ ja prontos continuam disponiveis e uma dublagem em andamento continua no backend
 | `POST /process/youtube` | Baixa somente o video indicado na URL, mesmo com parametros de playlist. Salva `source_type: youtube`. |
 | `POST /process/upload` | Copia o arquivo local para o job e salva `source_type: upload`. |
 | `GET /jobs/{job_id}/status` | Informa midia, audio dublado, video, legenda, processamento em curso e origem. |
-| `POST /dub` | Executa/reaproveita o pipeline de dublagem. So uma dublagem pesada roda por vez. |
+| `POST /dub` | Executa/reaproveita o pipeline de dublagem. Aceita `modo` (`qualidade`, padrao, ou `rapido`). So uma dublagem pesada roda por vez. |
 | `POST /generate-video` | Faz a mixagem e gera o MP4 sem retiming do video. |
-| `POST /subtitles/generate` | Gera transcricao/legenda somente quando solicitada. |
+| `POST /subtitles/generate` | Monta legenda/transcricao a partir dos textos da dublagem. |
 | `GET /export/original/{job_id}` | Entrega o video original logo apos upload/download. |
-| `GET /export/video/{job_id}` | Entrega `dubbed.mp4` quando pronto. |
+| `GET /export/video/{job_id}` | Entrega o video dublado quando pronto. |
 | `GET /export/subtitles/{job_id}` | Entrega a legenda `.srt` quando pronta. |
 | `GET /export/transcript-txt/{job_id}` | Entrega a transcricao em `.txt` puro quando pronta. |
+
+As rotas de export nomeiam o arquivo com o nome real do video (`display_name`), nao com
+nomes genericos: `<nome>.mp4`, `<nome>_dublado.mp4` e `<nome>.srt`. O mesmo nome base na
+legenda faz o player associa-la ao video sozinho. Em upload, o nome escolhido pelo
+usuario e guardado em `original_name`, porque o arquivo e gravado como `upload.<ext>`.
+
+Video original e legenda nao dependem do video dublado: o original vale desde a criacao
+do job e a legenda desde o fim da dublagem, mesmo sem a montagem final.
 
 Cada job fica em `backend/data/jobs/<job_id>` no desenvolvimento. No `.exe`,
 `OPENDUB_DATA_DIR` redireciona esse diretorio para o perfil do usuario, pois
 `resources` do aplicativo instalado e somente leitura.
 
-O `job.json` contem pelo menos `media_path` e `source_type`. Os arquivos de job mais
+O `job.json` contem pelo menos `media_path`, `source_type` e `original_name`. Os arquivos de job mais
 importantes sao:
 
 - `raw_44k_stereo.wav`: audio extraido do video;
@@ -77,16 +85,21 @@ importantes sao:
 3. **Separacao.** `torchaudio.pipelines.HDEMUCS_HIGH_MUSDB_PLUS` gera voz e
    instrumental. O modelo e removido da GPU antes da etapa seguinte.
 4. **Reducao de ruido.** DeepFilterNet3 limpa o mix original; o sinal limpo, e nao o
-   trecho com silencio bruto, e a entrada da deteccao de voz.
+   trecho com silencio bruto, e a entrada da deteccao de voz. O audio e processado em
+   blocos de 30 s com cruzamento nas bordas: por ser uma rede recorrente, o cuDNN recusa
+   a sequencia inteira em video longo. O modelo e descarregado da GPU em seguida, porque
+   o reconhecimento e a geracao de voz rodam em outros processos e disputam a placa.
 5. **VAD e recorte.** Silero VAD encontra falas; outro passe remove pausas internas
    >=100 ms, preservando 30 ms de margem. Trechos de fala menores que 150 ms sao
    ignorados.
 6. **Reconhecimento.** Parakeet TDT 0.6B v3 transcreve cada bloco com tempo por token.
 7. **Traducao.** Qwen3 4B (4 bits) traduz para pt-BR dentro do orcamento de caracteres
    derivado da janela de tempo do bloco.
-8. **Voz.** Chatterbox Multilingual V3 (pack pt-BR) gera a fala clonando a voz do video.
-   Cada tomada e transcrita de volta pelo Parakeet e comparada com o texto pedido; abaixo
-   de 80% de fidelidade o bloco e refeito com outra seed.
+8. **Voz.** No modo padrao, Chatterbox Multilingual V3 (pack pt-BR) gera a fala clonando
+   a voz do video; cada tomada e transcrita de volta pelo Parakeet e comparada com o texto
+   pedido, e abaixo de 80% de fidelidade o bloco e refeito com outra seed. No modo rapido,
+   o SeamlessM4T v2 traduz fala em fala numa passagem so, com voz sintetica fixa em
+   16 kHz. Os passos 6 e 7 rodam nos dois modos, entao a legenda sai igual.
 9. **Timeline.** Cada fala dublada retorna ao `start` original. Se exceder a janela
    antes da proxima fala, so a voz e acelerada, no maximo 1,3x.
 10. **Mux.** FFmpeg mistura instrumental e voz, copia o stream de video com `-c:v copy`
@@ -102,13 +115,14 @@ importantes sao:
 | `yt-dlp` | Download do video atual do YouTube. |
 | FFmpeg/FFprobe | Extracao, mixagem, mux e duracoes. |
 | PyTorch 2.9.1 CUDA 13.0, Torchaudio e TorchCodec | Execucao de modelos/GPU e HDemucs. |
-| Transformers 4.57.1 e Safetensors | Traducao com Qwen3 4B. |
+| Transformers 4.57.1 e Safetensors | Traducao com Qwen3 4B e, no modo rapido, SeamlessM4T v2. |
 | bitsandbytes | Carrega o Qwen3 4B em 4 bits, para caber em 8 GB de VRAM. |
 | DeepFilterNet 0.5.6 | Reducao de ruido. |
 | Silero VAD | Deteccao de fala e remocao de pausas. |
 | Librosa, SoundFile, NumPy | Leitura, escrita, resample e ajuste de audio. |
 | Parakeet TDT 0.6B v3 | Reconhecimento de fala e conferencia das tomadas de voz. |
-| Chatterbox Multilingual V3 (pt-BR) | Geracao da voz dublada com clonagem. |
+| Chatterbox Multilingual V3 (pt-BR) | Geracao da voz dublada com clonagem (modo padrao). |
+| SeamlessM4T v2 large | Traducao fala->fala do modo rapido. Baixado so quando esse modo e usado. |
 
 O backend principal usa Python 3.11. O reconhecimento de fala e a geracao de voz exigem
 versoes incompativeis do Transformers (`>=5.10` e `==5.2.0`), entao cada um roda em um
@@ -145,8 +159,10 @@ OPENDUB_TTS_MIN_FIDELIDADE=0.80
 OPENDUB_TTS_MAX_TENTATIVAS=3
 
 # Ambientes de ASR e TTS (preenchidos pelo aplicativo)
-OPENDUB_ASR_PYTHON=...untimesr\Scripts\python.exe
-OPENDUB_TTS_PYTHON=...untime	ts\Scripts\python.exe
+OPENDUB_ASR_PYTHON=...
+untimesr\Scripts\python.exe
+OPENDUB_TTS_PYTHON=...
+untime	ts\Scripts\python.exe
 ```
 
 O backend chama o `python.exe` de cada ambiente diretamente, em vez de `conda run`: no
