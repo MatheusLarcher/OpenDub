@@ -58,6 +58,11 @@ def run_dub(job_id: str, preserve_original_voice: bool = True) -> List[Dict]:
     from backend.services import denoise
 
     clean_wav = vad.load_16k_mono(denoise.clean_original(job_id))
+    # ASR e TTS rodam em outros processos e disputam a mesma placa: nada aqui pode
+    # continuar segurando VRAM depois que a limpeza terminou.
+    denoise.unload_model()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
     # A deteccao roda DEPOIS da limpeza: ruido removido nao vira falsa regiao de fala.
     chunks = vad.get_chunks(clean_wav)
     total_duration = clean_wav.shape[-1] / vad.VAD_SAMPLE_RATE

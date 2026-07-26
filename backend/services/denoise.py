@@ -13,6 +13,13 @@ from backend.services import jobs, media
 _model: Optional[torch.nn.Module] = None
 _state: Any = None
 
+# O DeepFilterNet e uma rede recorrente: mandar o audio inteiro de uma vez faz o cuDNN
+# recusar a sequencia (CUDNN_STATUS_NOT_SUPPORTED) em videos longos -- um video de 22 min
+# vira 65 milhoes de amostras numa unica chamada. Processar em blocos resolve e nao muda
+# o resultado, desde que as bordas sejam cruzadas.
+CHUNK_SECONDS = 30.0
+CROSSFADE_SECONDS = 0.5
+
 
 def _get_model() -> Tuple[torch.nn.Module, Any]:
     """Carrega DeepFilterNet3 uma vez, com compatibilidade para torchaudio 2.9.
@@ -33,6 +40,51 @@ def _get_model() -> Tuple[torch.nn.Module, Any]:
     return _model, _state
 
 
+def unload_model() -> None:
+    """Libera a VRAM: o ASR e o TTS rodam em outros processos e precisam da placa."""
+    global _model, _state
+    if _model is not None:
+        del _model
+        _model = None
+        _state = None
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+
+def _enhance_long(model, state, waveform: torch.Tensor, sample_rate: int) -> torch.Tensor:
+    from df.enhance import enhance
+
+    total = waveform.shape[-1]
+    chunk = int(CHUNK_SECONDS * sample_rate)
+    if total <= chunk:
+        return enhance(model, state, waveform.contiguous())
+
+    crossfade = int(CROSSFADE_SECONDS * sample_rate)
+    step = chunk - crossfade
+    fade_in = torch.linspace(0.0, 1.0, crossfade)
+    fade_out = 1.0 - fade_in
+    cleaned = torch.zeros_like(waveform)
+    start = 0
+    while start < total:
+        end = min(start + chunk, total)
+        # .contiguous() importa: o cuDNN recusa entrada nao contigua.
+        piece = enhance(model, state, waveform[..., start:end].contiguous())
+        piece = piece[..., : end - start]
+        if start == 0:
+            cleaned[..., start:end] = piece
+        else:
+            emenda = min(crossfade, piece.shape[-1])
+            cleaned[..., start : start + emenda] = (
+                cleaned[..., start : start + emenda] * fade_out[:emenda]
+                + piece[..., :emenda] * fade_in[:emenda]
+            )
+            cleaned[..., start + emenda : end] = piece[..., emenda:]
+        if end >= total:
+            break
+        start += step
+    return cleaned
+
+
 def clean_original(job_id: str) -> Path:
     """Limpa o mix original com DeepFilterNet antes da traducao S2ST.
 
@@ -51,8 +103,6 @@ def clean_original(job_id: str) -> Path:
     if sample_rate != target_sample_rate:
         waveform = resample(waveform, sample_rate, target_sample_rate)
 
-    from df.enhance import enhance
-
-    cleaned = enhance(model, state, waveform)
+    cleaned = _enhance_long(model, state, waveform, target_sample_rate)
     media.write_wav(output, cleaned, target_sample_rate)
     return output
