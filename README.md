@@ -28,6 +28,9 @@ para uma visão geral, demonstração em vídeo e o link de download.
 5. Baixe o vídeo dublado. A legenda pode ser gerada e baixada assim que a dublagem
    termina, e o vídeo original fica disponível desde o começo.
 
+A cada etapa concluída aparece um aviso no canto da tela, e ao baixar qualquer arquivo o
+aviso diz **em que pasta ele foi salvo**.
+
 Os arquivos baixados usam o nome do seu vídeo: `meu video.mp4` (original),
 `meu video_dublado.mp4` e `meu video.srt`. Como a legenda tem o mesmo nome do vídeo, a
 maioria dos players a reconhece sozinha.

@@ -134,8 +134,31 @@ ambientes e por arquivo JSON, em `backend/scripts/asr_worker.py` e `tts_worker.p
 | React 18 | Estado e interface. |
 | Vite | Servidor de desenvolvimento e build estatico. |
 | Framer Motion | Progresso, entradas/saidas de cards, resultado e spinners. |
+| `src/toast.js` e `src/Toaster.jsx` | Notificacoes na tela, no mesmo padrao usado no CRM. |
 | Electron 30 | Janela desktop e inicio do backend local. |
 | Electron Builder/NSIS | Empacotamento do instalador Windows. |
+
+## Notificacoes na interface
+
+`src/toast.js` expoe `toast.success/error/warning/info(mensagem, duracao)` e
+`src/Toaster.jsx` desenha a pilha no canto superior direito -- mesma API e mesma
+linguagem visual do Toaster do CRM, com borda esquerda colorida por tipo, botao de fechar
+e barra que esvazia no tempo da notificacao. Maximo de cinco na tela.
+
+Duas diferencas de stack em relacao ao CRM: os icones sao SVG inline (o projeto nao usa
+lucide-react) e as animacoes sao CSS. Tentar fazer a saida com `AnimatePresence` do
+framer-motion deixava o no no DOM para sempre com `opacity: 0` -- invisivel, mas
+acumulando e capturando clique, porque `pointer-events` continuava ativo. A mecanica do
+CRM (estado `saindo` + remover da lista depois de 220 ms) nao tem esse problema.
+
+Avisam: video adicionado, dublagem concluida, legenda pronta (com o numero de falas),
+cada download concluido e as falhas de todas essas etapas. Tambem cobrem dois casos que
+antes aconteciam em silencio -- a sessao descartada quando o job nao existe mais no
+backend, e o arquivo recusado por nao ser video.
+
+Os downloads dizem **onde** o arquivo foi salvo (`<arquivo> salvo na pasta Downloads`).
+O processo principal manda `download-done` para todo download, com nome e pasta; antes
+havia um evento so para o video dublado, e sem o caminho.
 
 ## Configuracao e variaveis importantes
 
