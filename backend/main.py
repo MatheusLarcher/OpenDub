@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
-from backend.services import jobs
+from backend.services import jobs, progress
 
 load_dotenv(BASE_DIR / ".env")
 
@@ -218,6 +218,7 @@ def dub(payload: JobRequest):
         segments = dubbing_pipeline.run_dub(payload.job_id)
     finally:
         _active_dub_job_id = None
+        progress.concluir(payload.job_id)
         _dub_lock.release()
     return {"job_id": payload.job_id, "segments": segments, "audio_url": f"/export/audio/{payload.job_id}"}
 
@@ -241,6 +242,9 @@ def job_status(job_id: str):
         "video_ready": jobs.dubbed_video_path(job_id).exists(),
         "subtitles_ready": jobs.subtitles_srt_path(job_id).exists(),
         "processing_dub": _active_dub_job_id == job_id,
+        # Andamento real da dublagem (None quando nao ha dublagem rodando). `teto` e o
+        # fim da fase atual: a barra pode avancar sozinha ate ele, nunca alem.
+        "dub_progress": progress.ler(job_id),
         "source_type": meta.get("source_type"),
         "segments": segments,
     }

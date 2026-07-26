@@ -38,6 +38,7 @@ verbosa precisa ter `stdout` e `stderr` consumidos.
    referencia: nao ha opcao a escolher.
 5. A interface acompanha o progresso. A interface mostra as etapas Adicionar, Preparar,
    Dublar e Finalizar, bloqueando botoes duplicados enquanto ha uma requisicao ativa.
+   A barra da etapa Dublar reflete o trabalho de verdade -- ver "Barra de progresso".
 6. Ao terminar, baixe video dublado, video original e legenda `.srt` (a legenda e
    solicitada separadamente).
 
@@ -145,6 +146,46 @@ ambientes e por arquivo JSON, em `backend/scripts/asr_worker.py` e `tts_worker.p
 | `src/toast.js` e `src/Toaster.jsx` | Notificacoes na tela, no mesmo padrao usado no CRM. |
 | Electron 30 | Janela desktop e inicio do backend local. |
 | Electron Builder/NSIS | Empacotamento do instalador Windows. |
+
+## Barra de progresso
+
+A etapa **Dublar** demora dezenas de minutos, entao a barra dela nao pode avancar so com o
+relogio. A versao antiga usava `1 - e^(-t/45)`: em dois minutos chegava a 95% e ficava
+visualmente parada pelo resto do processo.
+
+Hoje o andamento vem do trabalho real, publicado por `services/progress.py` e devolvido em
+`dub_progress` no `/jobs/{id}/status` (a pagina ja consultava esse endpoint a cada 2 s, entao
+nao ha canal novo). Os pesos por fase foram medidos cronometrando um video de 14 min:
+
+| Fase | Peso |
+| --- | --- |
+| Separar (Demucs) | 8% |
+| Limpar (DeepFilterNet) + detectar fala | 2% |
+| Reconhecer (Parakeet) | 2% |
+| Traduzir (Qwen3) | 11% |
+| Gerar voz (Chatterbox) | 75% |
+| Montar o audio | 2% |
+
+O sinal fino vem da geracao de voz, que sozinha e 3/4 do tempo: o worker grava um wav por
+bloco assim que termina cada um, entao contar arquivos na pasta ja diz quantos ficaram
+prontos -- sem mudar o protocolo dos workers.
+
+Tres garantias, nessa ordem de importancia:
+
+- **Nunca regride.** As retentativas do TTS reprocessam so os blocos reprovados, entao
+  "prontos/total" cairia a cada passada -- foi o que quebrou uma tentativa anterior. Cada
+  passada ocupa a sobra da anterior (60% do que resta), nunca recomeca a contagem.
+- **Nunca trava.** Entre duas respostas do backend a interface continua subindo sozinha,
+  cada vez mais devagar.
+- **Nunca mente.** Essa subida sozinha para no teto da fase atual e nao invade a proxima.
+
+A barra e ancorada na posicao real dos nos, medida no layout com `ResizeObserver`: sai do
+circulo **Dublar** e para a 94% do caminho ate **Finalizar**, que fica para a juncao do audio
+no video (7 s no video medido). Porcentagens fixas nao serviriam: a linha e recuada 10% de
+cada lado, entao os nos das pontas caem fora dela.
+
+Medido no aplicativo instalado, com 149 amostras de 2 em 2 segundos: nenhuma regressao,
+inicio em 69,3% (o no fica em 69,1%) e fim da dublagem em 97,6%, antes do no Finalizar.
 
 ## Notificacoes na interface
 

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import Toaster from "./Toaster";
 import { toast } from "./toast";
@@ -47,7 +47,10 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [subtitleSegments, setSubtitleSegments] = useState([]);
-  const [dubFakeProgress, setDubFakeProgress] = useState(0);
+  const [dubShown, setDubShown] = useState(0);
+  const [dubProgress, setDubProgress] = useState(null);
+  const dubProgressRef = useRef(null);
+  dubProgressRef.current = dubProgress;
   const [videoFakeProgress, setVideoFakeProgress] = useState(0);
   const [dubbedVideoPath, setDubbedVideoPath] = useState(null);
   const [ultimoDownload, setUltimoDownload] = useState(null);
@@ -114,6 +117,7 @@ export default function App() {
           subtitles: data.subtitles_ready ? "done" : current.subtitles
         }));
         if (data.source_type) setSourceType(data.source_type);
+        if (data.dub_progress) setDubProgress(data.dub_progress);
         // O polling so pode LIGAR o loading (detectar dublagem em andamento apos um reload).
         // Quem desliga e sempre o fluxo local (dubVideo/generateSubtitles no finally) -- o
         // backend so marca "processing_dub" durante a traducao, nao durante gerar o video final,
@@ -128,16 +132,23 @@ export default function App() {
     return () => { cancelled = true; window.clearInterval(pollId); };
   }, [jobId]);
 
-  // Progresso "de verdade nunca soubemos quantos blocos faltam", então a barra avança sozinha
-  // com o tempo, desacelerando conforme se aproxima do teto da etapa (nunca chega nele) --
-  // ao terminar de verdade, o estado muda e a barra salta pro valor real da proxima etapa.
-  // Isso nunca trava (sempre andando) e nunca regride (so' depende do tempo decorrido).
+  // A dublagem informa o andamento de verdade (fase atual + blocos de voz ja gerados).
+  // Aqui esse valor vira a barra, com tres garantias:
+  // - nunca regride: guardamos o maior valor ja exibido;
+  // - nunca trava: entre duas respostas do backend a barra continua subindo sozinha,
+  //   devagar, encostando no teto da fase;
+  // - nunca mente: essa subida sozinha para no teto da fase e nao invade a proxima.
+  // A versao antiga avancava so pelo relogio e saturava em ~2 min, ficando visivelmente
+  // parada pelo resto de um processo que dura dezenas de minutos.
   useEffect(() => {
-    if (status.dub !== "loading") { setDubFakeProgress(0); return undefined; }
-    const startedAt = Date.now();
+    if (status.dub !== "loading") { setDubShown(0); return undefined; }
     const timer = window.setInterval(() => {
-      const elapsedS = (Date.now() - startedAt) / 1000;
-      setDubFakeProgress(1 - Math.exp(-elapsedS / 45));
+      setDubShown((atual) => {
+        const { progresso = 0, teto = 0 } = dubProgressRef.current || {};
+        const alvo = Math.max(atual, progresso);
+        // Aproximacao assintotica do teto: sempre anda, cada vez menos.
+        return Math.min(teto || alvo, alvo + (Math.max(teto, alvo) - alvo) * 0.02);
+      });
     }, 400);
     return () => window.clearInterval(timer);
   }, [status.dub]);
@@ -151,6 +162,30 @@ export default function App() {
     }, 400);
     return () => window.clearInterval(timer);
   }, [status.video]);
+
+  // Onde cada no cai DENTRO da barra, em %. Medido no layout em vez de chutado: a barra
+  // comeca e termina recuada em relacao aos circulos, e os rotulos mudam de largura.
+  // Enquanto a medicao nao aconteceu, um espacamento igual serve de aproximacao.
+  const [nodePositions, setNodePositions] = useState([0, 33, 67, 100]);
+  const lineRef = useRef(null);
+  const stepRefs = useRef([]);
+  useLayoutEffect(() => {
+    const medir = () => {
+      const linha = lineRef.current?.getBoundingClientRect();
+      if (!linha?.width) return;
+      const posicoes = stepRefs.current.map((node) => {
+        const alvo = node?.getBoundingClientRect();
+        if (!alvo) return 0;
+        const centro = alvo.left + alvo.width / 2;
+        return Math.min(100, Math.max(0, ((centro - linha.left) / linha.width) * 100));
+      });
+      if (posicoes.length === 4) setNodePositions(posicoes);
+    };
+    medir();
+    const observer = new ResizeObserver(medir);
+    if (lineRef.current) observer.observe(lineRef.current);
+    return () => observer.disconnect();
+  }, []);
 
   const downloads = useMemo(() => jobId ? ({
     subtitles: `${API_BASE}/export/subtitles/${jobId}`,
@@ -311,13 +346,22 @@ export default function App() {
 
   const videoReady = status.video === "done";
   const label = busy ? (status.job === "loading" ? "Preparando vídeo…" : status.video === "loading" ? "Finalizando vídeo…" : "Traduzindo e dublando…") : "Dublar meu vídeo";
+  // Cada etapa ocupa o trecho entre o SEU no e o proximo -- as ancoras sao medidas no
+  // layout real (`nodePositions`), entao a barra encosta nos circulos mesmo se o texto
+  // dos rotulos mudar de tamanho. Antes eram porcentagens fixas, que nao batiam com os nos.
+  const [adicionar, preparar, dublar, finalizar] = nodePositions;
+  const entre = (de, ate, fracao) => de + (ate - de) * fracao;
+  // A dublagem para pouco antes do fim do seu trecho: encostar no no "Finalizar" antes
+  // de o video existir e justamente a mentira que queremos evitar. O resto fica para a
+  // juncao do audio no video, que leva segundos.
+  const fimDaDublagem = entre(dublar, finalizar, 0.94);
   const progress = videoReady ? 100
-    : status.video === "loading" ? 74 + Math.round(23 * videoFakeProgress)
-    : status.dub === "done" ? 74
-    : status.dub === "loading" ? 25 + Math.round(45 * dubFakeProgress)
-    : status.job === "done" ? 25
-    : status.job === "loading" ? 10
-    : 0;
+    : status.video === "loading" ? entre(fimDaDublagem, finalizar, videoFakeProgress)
+    : status.dub === "done" ? fimDaDublagem
+    : status.dub === "loading" ? entre(dublar, fimDaDublagem, dubShown)
+    : status.job === "done" ? preparar
+    : status.job === "loading" ? entre(adicionar, preparar, 0.5)
+    : adicionar;
   const steps = [
     { name: "Adicionar", done: status.job === "done", active: status.job === "loading" },
     { name: "Preparar", done: status.job === "done", active: status.job === "done" && status.dub === "idle" },
@@ -336,8 +380,8 @@ export default function App() {
         </motion.div>
 
         <motion.section className="progress-tracker" initial="hidden" animate="visible" variants={enter} transition={{ duration: .45, delay: .08 }} aria-label="Etapas do processo">
-          <div className="progress-line"><motion.i animate={{ width: `${progress}%` }} transition={busy ? { ease: "linear", duration: .4 } : { type: "spring", stiffness: 75, damping: 18 }} /></div>
-          <div className="progress-steps">{steps.map((step, index) => <div key={step.name} className={`progress-step ${step.done ? "is-done" : ""} ${step.active ? "is-active" : ""}`}><span>{step.done ? "✓" : step.active && busy ? <motion.i className="tiny-spinner" animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: .8, ease: "linear" }} /> : index + 1}</span><small>{step.name}</small></div>)}</div>
+          <div className="progress-line" ref={lineRef}><motion.i animate={{ width: `${progress}%` }} transition={busy ? { ease: "linear", duration: .4 } : { type: "spring", stiffness: 75, damping: 18 }} /></div>
+          <div className="progress-steps">{steps.map((step, index) => <div key={step.name} className={`progress-step ${step.done ? "is-done" : ""} ${step.active ? "is-active" : ""}`}><span ref={(node) => { stepRefs.current[index] = node; }}>{step.done ? "✓" : step.active && busy ? <motion.i className="tiny-spinner" animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: .8, ease: "linear" }} /> : index + 1}</span><small>{step.name}</small></div>)}</div>
         </motion.section>
 
         <AnimatePresence mode="wait">{!jobId && <motion.section className="source-card" key="source" initial="hidden" animate="visible" exit="hidden" variants={enter} transition={{ duration: .3 }}>

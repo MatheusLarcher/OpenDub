@@ -15,7 +15,7 @@ import os
 from pathlib import Path
 from typing import Dict, List
 
-from backend.services import asr, jobs, subprocess_env
+from backend.services import asr, jobs, progress, subprocess_env
 
 TTS_PYTHON_VAR = "OPENDUB_TTS_PYTHON"
 NOME_AMIGAVEL = "geracao de voz"
@@ -77,6 +77,9 @@ def synthesize_blocks(job_id: str, reference: Path, textos: List[str]) -> List[D
             }
             for index in pendentes
         ]
+        # O worker so responde no fim, mas grava um wav por bloco durante a geracao:
+        # avisar quantos blocos esta passada tem deixa a barra contar os arquivos.
+        progress.tentativa_de_voz(job_id, tentativa, len(pedidos), blocks_dir)
         gerados = _synthesize(job_id, reference, pedidos, f"tts_t{tentativa}")
 
         conferir = []

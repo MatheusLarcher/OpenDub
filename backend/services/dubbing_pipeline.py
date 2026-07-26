@@ -5,7 +5,7 @@ from typing import Dict, List
 
 import torch
 
-from backend.services import asr, jobs, media, separation, translation, tts, vad
+from backend.services import asr, jobs, media, progress, separation, translation, tts, vad
 
 # Ate quanto a voz dublada pode acelerar (preservando tom) pra caber antes da proxima
 # fala comecar, sem NUNCA sobrepor ou cortar. Video nunca e retimado -- cortes/musica
@@ -47,6 +47,7 @@ def run_dub(job_id: str) -> List[Dict]:
     voz acelera um pouco (tom preservado), ate o teto de MAX_DUB_SPEEDUP.
 
     """
+    progress.iniciar(job_id)
     vocals_path, _instrumental_path = separation.separate(job_id)
     # A separacao e pesada em VRAM e nada depois dela precisa do Demucs carregado.
     separation.unload_model()
@@ -55,6 +56,7 @@ def run_dub(job_id: str) -> List[Dict]:
 
     from backend.services import denoise
 
+    progress.fase(job_id, "limpando")
     clean_wav = vad.load_16k_mono(denoise.clean_original(job_id))
     # ASR e TTS rodam em outros processos e disputam a mesma placa: nada aqui pode
     # continuar segurando VRAM depois que a limpeza terminou.
@@ -94,6 +96,7 @@ def run_dub(job_id: str) -> List[Dict]:
     reference_path, _reference_chunk = _write_reference(job_id, clean_wav, [i["chunk"] for i in prepared])
 
     print(f"[dub] transcrevendo {len(prepared)} blocos de fala")
+    progress.fase(job_id, "reconhecendo")
     transcricoes = asr.transcribe_segments(job_id, [item["path"] for item in prepared])
 
     # A janela de cada bloco vai do inicio dele ate o inicio do proximo: e o espaco
@@ -107,6 +110,7 @@ def run_dub(job_id: str) -> List[Dict]:
         janelas.append(max(0.0, next_start - start))
 
     print("[dub] traduzindo para portugues")
+    progress.fase(job_id, "traduzindo")
     traducoes = translation.translate_blocks(
         [
             {"text": transcricoes[index]["text"], "window_s": janelas[index]}
@@ -118,7 +122,9 @@ def run_dub(job_id: str) -> List[Dict]:
         torch.cuda.empty_cache()
 
     print("[dub] gerando a voz em portugues")
+    progress.fase(job_id, "gerando_voz")
     vozes = tts.synthesize_blocks(job_id, reference_path, traducoes)
+    progress.fase(job_id, "montando")
 
     sample_rate = next(
         (item["sample_rate"] for item in vozes if item["path"] and item["sample_rate"]), 24000
