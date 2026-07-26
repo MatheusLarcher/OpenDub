@@ -68,12 +68,15 @@ def run_dub(job_id: str) -> List[Dict]:
     segments_dir = jobs.job_dir(job_id) / "fala_original"
     segments_dir.mkdir(exist_ok=True)
     prepared: List[Dict] = []
+    # O bloco vai inteiro para o reconhecimento, com as pausas internas. Cortar as pausas
+    # antes existia por causa do motor antigo, que copiava a estrutura de pausa da entrada
+    # para a fala gerada; hoje o TTS recebe apenas texto. Medido no mesmo audio, cortar
+    # mudava a transcricao em 7 de 11 blocos e chegava a quebrar palavra ("A six DOF" virou
+    # "A six deal F"), economizando 7% de audio -- 0,24 s de processamento.
     for chunk in chunks:
         audio = vad.slice_audio(clean_wav, chunk["start"], chunk["end"])
-        original_samples = audio.numel()
-        audio = vad.remove_silence(audio)
         if audio.numel() < int(MIN_SPEECH_SAMPLES_RATIO * vad.VAD_SAMPLE_RATE):
-            print(f"[dub] trecho {chunk['start']:.1f}s-{chunk['end']:.1f}s ignorado: sem fala")
+            print(f"[dub] trecho {chunk['start']:.1f}s-{chunk['end']:.1f}s ignorado: curto demais")
             continue
         path = segments_dir / f"bloco_{len(prepared):03d}.wav"
         media.write_wav(path, audio[None, :], vad.VAD_SAMPLE_RATE)
@@ -82,9 +85,6 @@ def run_dub(job_id: str) -> List[Dict]:
                 "chunk": chunk,
                 "path": path,
                 "input_ms": audio.numel() / vad.VAD_SAMPLE_RATE * 1000.0,
-                "silence_removed_ms": (original_samples - audio.numel())
-                / vad.VAD_SAMPLE_RATE
-                * 1000.0,
             }
         )
 
@@ -178,7 +178,6 @@ def run_dub(job_id: str) -> List[Dict]:
                 "fidelidade": voz["fidelidade"],
                 "tentativas": voz["tentativas"],
                 "input_ms": item["input_ms"],
-                "silence_removed_ms": item["silence_removed_ms"],
             }
         )
 

@@ -50,16 +50,37 @@ da etapa seguinte.
 
 1. DeepFilterNet3 limpa o audio original e grava `cleaned_original_48k_mono.wav`;
 2. o audio e convertido para mono/16 kHz;
-3. Silero VAD detecta os blocos no sinal ja limpo;
-4. dentro de cada bloco, um segundo VAD remove pausas a partir de 100 ms, mantendo
-   30 ms de margem para nao cortar consoantes;
-5. blocos com menos de 150 ms de fala sao descartados.
+3. Silero VAD detecta os blocos no sinal ja limpo, cortando em silencios de 350 ms ou
+   mais, com 80 ms de folga em cada ponta e um teto de 16 s por bloco;
+4. blocos com menos de 150 ms sao descartados.
+
+O bloco vai inteiro para o reconhecimento, com as pausas internas. Havia um segundo passe
+que removia pausas a partir de 100 ms, herdado do motor fala->fala (que copiava a
+estrutura de pausa da entrada para a saida). Medido no mesmo audio, ele mudava a
+transcricao em 7 de 11 blocos e chegava a quebrar palavra -- "A six DOF" virou "A six
+deal F" -- para economizar 7% de audio, ou 0,24 s de processamento. Foi removido.
 
 ```dotenv
 MAX_CHUNK_DURATION_S=16
-SPEECH_ONLY_MIN_SILENCE_MS=100
-SPEECH_ONLY_PAD_MS=30
 ```
+
+**O fatiamento nao corta no meio da palavra.** Medindo a energia do audio nos 42 pontos de
+corte de um clipe de 3 min: 41 caem no silencio e 1 fica na fronteira do piso de ruido
+(rms 0,048 contra limite 0,0477). Nenhum bloco bateu no teto de 16 s, que e o unico caso
+em que o corte seria forcado no meio da fala.
+
+Fatiar tambem **melhora** o reconhecimento em vez de piorar. No mesmo clipe, transcrever o
+audio inteiro numa passagem contra fatiado em blocos:
+
+| | Inteiro | Fatiado |
+|---|---|---|
+| Palavras | 184 | **215** |
+| Pontuacoes | 6 | **31** |
+| Palavras com maiuscula | 10 | **54** |
+
+Em audio longo o modelo sai da distribuicao em que foi treinado (trechos de fala) e
+degenera num fluxo sem pontuacao nem caixa alta, perdendo palavras. A pontuacao importa
+duas vezes depois: a traducao usa a frase como contexto e o TTS pt-BR depende dela.
 
 ### Referencia de voz
 
