@@ -4,7 +4,6 @@ import shutil
 import sys
 from threading import Lock
 from pathlib import Path
-from typing import Literal
 from urllib.parse import urlparse
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -46,9 +45,6 @@ class YoutubeRequest(BaseModel):
 
 class JobRequest(BaseModel):
     job_id: str
-    # "qualidade" recria a voz da pessoa; "rapido" usa o Seamless, ~3x mais rapido,
-    # com voz sintetica fixa.
-    modo: Literal["qualidade", "rapido"] = "qualidade"
 
 
 class SubtitlesRequest(BaseModel):
@@ -219,7 +215,7 @@ def dub(payload: JobRequest):
         )
     try:
         _active_dub_job_id = payload.job_id
-        segments = dubbing_pipeline.run_dub(payload.job_id, modo=payload.modo)
+        segments = dubbing_pipeline.run_dub(payload.job_id)
     finally:
         _active_dub_job_id = None
         _dub_lock.release()

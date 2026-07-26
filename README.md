@@ -17,28 +17,15 @@ para uma visão geral, demonstração em vídeo e o link de download.
   como referência, então não é aquela voz de robô.
 - Também gera a legenda (`.srt`) e a transcrição (`.txt`) **em português**.
 
-## Os dois modos
-
-Na hora de dublar você escolhe:
-
-| | Na voz do vídeo | Rápido |
-| --- | --- | --- |
-| Como fica a voz | a voz da pessoa do vídeo | uma voz sintética |
-| Quanto demora | mais devagar | cerca de 3x mais rápido |
-
-O primeiro vem marcado por padrão. O modo rápido ajuda quando o vídeo é longo e você
-quer o resultado logo. A legenda sai igual nos dois.
-
 ## Como usar
 
 1. Abra o aplicativo.
 2. Cole o link de um vídeo do YouTube **ou** arraste/escolha um vídeo do seu
    computador.
-3. Clique em **Continuar**.
-4. Escolha o modo e clique em **Dublar meu vídeo**.
-5. Espere a barra de progresso terminar. Como referência: um vídeo de 3 minutos levou
-   cerca de 6 minutos na voz do vídeo, num computador com placa de vídeo de entrada.
-6. Baixe o vídeo dublado. A legenda pode ser gerada e baixada assim que a dublagem
+3. Clique em **Continuar** e depois em **Dublar meu vídeo**.
+4. Espere a barra de progresso terminar. Como referência: um vídeo de 3 minutos levou
+   cerca de 6 minutos, num computador com placa de vídeo de entrada.
+5. Baixe o vídeo dublado. A legenda pode ser gerada e baixada assim que a dublagem
    termina, e o vídeo original fica disponível desde o começo.
 
 Os arquivos baixados usam o nome do seu vídeo: `meu video.mp4` (original),

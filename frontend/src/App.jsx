@@ -11,10 +11,6 @@ const VIDEO_EXTENSIONS = [
   ".wmv", ".flv", ".ts", ".m2ts", ".3gp", ".ogv"
 ];
 const enter = { hidden: { opacity: 0, y: 16 }, visible: { opacity: 1, y: 0 } };
-const MODES = [
-  { id: "qualidade", title: "Na voz do vídeo", detail: "Recria a voz da pessoa. Mais demorado." },
-  { id: "rapido", title: "Rápido", detail: "Cerca de 3x mais rápido, com voz sintética." }
-];
 
 function loadSavedSession() {
   try {
@@ -53,7 +49,6 @@ export default function App() {
   const [subtitleSegments, setSubtitleSegments] = useState([]);
   const [dubFakeProgress, setDubFakeProgress] = useState(0);
   const [videoFakeProgress, setVideoFakeProgress] = useState(0);
-  const [dubMode, setDubMode] = useState(savedSession.dubMode === "rapido" ? "rapido" : "qualidade");
   const [dubbedVideoPath, setDubbedVideoPath] = useState(null);
   const [videoOpened, setVideoOpened] = useState(false);
   const fileInput = useRef(null);
@@ -64,8 +59,8 @@ export default function App() {
       window.localStorage.removeItem(SESSION_KEY);
       return;
     }
-    window.localStorage.setItem(SESSION_KEY, JSON.stringify({ jobId, sourceType, dubMode }));
-  }, [jobId, sourceType, dubMode]);
+    window.localStorage.setItem(SESSION_KEY, JSON.stringify({ jobId, sourceType }));
+  }, [jobId, sourceType]);
 
   useEffect(() => {
     if (!window.app?.onVideoDownloadComplete) return;
@@ -248,7 +243,7 @@ export default function App() {
         const response = await fetch(`${API_BASE}/dub`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ job_id: jobId, modo: dubMode })
+          body: JSON.stringify({ job_id: jobId })
         });
         if (!response.ok) throw new Error(await response.text());
         await response.json();
@@ -374,22 +369,7 @@ export default function App() {
               <b>{status.subtitles === "loading" ? "Gerando…" : "Gerar"}</b>
             </motion.button>
           ))}
-          <div className="mode-picker" role="radiogroup" aria-label="Modo de dublagem">
-            {MODES.map((mode) => (
-              <button
-                key={mode.id}
-                type="button"
-                role="radio"
-                aria-checked={dubMode === mode.id}
-                className={`mode-option ${dubMode === mode.id ? "is-selected" : ""}`}
-                onClick={() => setDubMode(mode.id)}
-                disabled={busy || status.dub === "done"}
-              >
-                <strong>{mode.title}</strong>
-                <small>{mode.detail}</small>
-              </button>
-            ))}
-          </div>
+          <div className="voice-note"><span className="voice-note-icon">♪</span><span><strong>A voz do vídeo é mantida</strong><small>A dublagem usa a própria voz da pessoa como referência.</small></span></div>
           {!videoReady && <button className="primary-button" onClick={dubVideo} disabled={busy || status.job !== "done"}>{busy ? <><motion.i className="button-spinner" animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: .8, ease: "linear" }} /> {label}</> : <>{label}<span>→</span></>}</button>}
           {busy && <motion.div className="processing" initial={{ opacity: 0 }} animate={{ opacity: 1 }}><i /><span>{status.dub === "loading" ? "Traduzindo, limpando e recriando a voz. Isso pode levar alguns minutos." : "Não feche esta página. Seu progresso será recuperado ao voltar."}</span></motion.div>}
         </motion.section>}</AnimatePresence>

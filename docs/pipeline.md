@@ -21,28 +21,6 @@ A clonagem passou a ser nativa do TTS: nao existe mais opcao de "manter entonaca
 original", porque a voz do video e sempre a referencia. A saida subiu de 16 kHz para
 24 kHz.
 
-## Os dois modos
-
-A cascata entrega a voz da pessoa, mas cobra tempo. Para video longo existe um modo
-rapido que troca so a etapa mais cara -- gerar a voz clonada e conferir cada tomada --
-por uma unica passagem do SeamlessM4T v2:
-
-| | Na voz do video (padrao) | Rapido |
-|---|---|---|
-| Voz | a voz da pessoa | sintetica, fixa |
-| Audio | 24 kHz | 16 kHz |
-| Medido em clipe de 45 s | 192 s | 72 s |
-
-Reconhecimento e traducao rodam nos **dois** modos, entao a legenda sai igual em ambos.
-O que muda e apenas de onde vem o audio de cada bloco. O Seed-VC nao voltou: quem quer
-a propria voz usa o modo padrao.
-
-```dotenv
-SEAMLESS_BATCH_SIZE=4
-```
-
-O modelo do Seamless (cerca de 9 GB) so e baixado se o modo rapido for usado.
-
 ## Etapas
 
 ### Entrada do YouTube
@@ -234,14 +212,7 @@ Custo por etapa, clipe de 15 s no modo padrao:
 | Montar o video | 0,3 s |
 | **Total pela interface** | **~126 s** |
 
-Gerar a voz domina o custo — e e exatamente a etapa que o modo rapido substitui.
-
-Os dois modos, mesmo clipe de 45 s:
-
-| Modo | Tempo |
-|---|---|
-| Na voz do video | 191,6 s |
-| Rapido | 72,2 s |
+Gerar a voz domina o custo: e a etapa mais lenta de todo o pipeline.
 
 Video mais longo, 3 min de um tutorial real, modo padrao: 353 s, 42 blocos, nenhum
 bloco mudo, fidelidade media de 83%. Os blocos abaixo do corte vinham de fala
