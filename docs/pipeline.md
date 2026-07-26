@@ -21,6 +21,28 @@ A clonagem passou a ser nativa do TTS: nao existe mais opcao de "manter entonaca
 original", porque a voz do video e sempre a referencia. A saida subiu de 16 kHz para
 24 kHz.
 
+## Os dois modos
+
+A cascata entrega a voz da pessoa, mas cobra tempo. Para video longo existe um modo
+rapido que troca so a etapa mais cara -- gerar a voz clonada e conferir cada tomada --
+por uma unica passagem do SeamlessM4T v2:
+
+| | Na voz do video (padrao) | Rapido |
+|---|---|---|
+| Voz | a voz da pessoa | sintetica, fixa |
+| Audio | 24 kHz | 16 kHz |
+| Medido em clipe de 45 s | 192 s | 72 s |
+
+Reconhecimento e traducao rodam nos **dois** modos, entao a legenda sai igual em ambos.
+O que muda e apenas de onde vem o audio de cada bloco. O Seed-VC nao voltou: quem quer
+a propria voz usa o modo padrao.
+
+```dotenv
+SEAMLESS_BATCH_SIZE=4
+```
+
+O modelo do Seamless (cerca de 9 GB) so e baixado se o modo rapido for usado.
+
 ## Etapas
 
 ### Entrada do YouTube
@@ -163,6 +185,15 @@ OPENDUB_TTS_PYTHON=...\runtime\tts\Scripts\python.exe
 - `dubbed.wav`: voz final (24 kHz);
 - `dubbed.mp4`: video final;
 - `subtitles.srt` e `transcript.txt`: legenda e transcricao em portugues.
+
+Os downloads recebem o nome real do video (titulo do YouTube ou nome do arquivo
+enviado, guardado em `original_name`): `<nome>.mp4` para o original,
+`<nome>_dublado.mp4` para o dublado e `<nome>.srt` para a legenda -- o mesmo nome base
+faz o player casar legenda e video sozinho.
+
+Video original e legenda ficam disponiveis antes do video dublado: o original assim que
+o job e criado, a legenda assim que a dublagem termina, mesmo que a montagem final ainda
+nao tenha rodado.
 
 ## Inicializacao pelo aplicativo Electron
 

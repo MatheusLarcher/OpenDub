@@ -9,6 +9,10 @@ const VIDEO_EXTENSIONS = [
   ".wmv", ".flv", ".ts", ".m2ts", ".3gp", ".ogv"
 ];
 const enter = { hidden: { opacity: 0, y: 16 }, visible: { opacity: 1, y: 0 } };
+const MODES = [
+  { id: "qualidade", title: "Na voz do vídeo", detail: "Recria a voz da pessoa. Mais demorado." },
+  { id: "rapido", title: "Rápido", detail: "Cerca de 3x mais rápido, com voz sintética." }
+];
 
 function loadSavedSession() {
   try {
@@ -47,6 +51,7 @@ export default function App() {
   const [subtitleSegments, setSubtitleSegments] = useState([]);
   const [dubFakeProgress, setDubFakeProgress] = useState(0);
   const [videoFakeProgress, setVideoFakeProgress] = useState(0);
+  const [dubMode, setDubMode] = useState(savedSession.dubMode === "rapido" ? "rapido" : "qualidade");
   const [dubbedVideoPath, setDubbedVideoPath] = useState(null);
   const [videoOpened, setVideoOpened] = useState(false);
   const fileInput = useRef(null);
@@ -57,8 +62,8 @@ export default function App() {
       window.localStorage.removeItem(SESSION_KEY);
       return;
     }
-    window.localStorage.setItem(SESSION_KEY, JSON.stringify({ jobId, sourceType }));
-  }, [jobId, sourceType]);
+    window.localStorage.setItem(SESSION_KEY, JSON.stringify({ jobId, sourceType, dubMode }));
+  }, [jobId, sourceType, dubMode]);
 
   useEffect(() => {
     if (!window.app?.onVideoDownloadComplete) return;
@@ -229,7 +234,7 @@ export default function App() {
         const response = await fetch(`${API_BASE}/dub`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ job_id: jobId })
+          body: JSON.stringify({ job_id: jobId, modo: dubMode })
         });
         if (!response.ok) throw new Error(await response.text());
         await response.json();
@@ -330,10 +335,41 @@ export default function App() {
 
         <AnimatePresence>{jobId && <motion.section className="workflow-card" key="workflow" initial="hidden" animate="visible" variants={enter} transition={{ duration: .3 }}>
           <div className="step-row"><span className="done-dot">✓</span><div><strong>Vídeo adicionado</strong><small>Ele continua disponível mesmo se você recarregar a página.</small></div><button className={videoOpened ? "text-button is-cta cta-pulse" : "text-button"} onClick={resetJob} disabled={busy}>{videoOpened ? "Dublar outro vídeo" : "Trocar"}</button></div>
-          {sourceType === "youtube" && status.job === "done" && <motion.a className="original-download" href={downloads.original} initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }}>
-            <span className="download-mini-icon">↓</span><span><strong>Baixar vídeo original</strong><small>O vídeo do YouTube já está pronto para baixar.</small></span><b>Baixar</b>
+          {status.job === "done" && <motion.a className="original-download" href={downloads.original} initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }}>
+            <span className="download-mini-icon">↓</span><span><strong>Baixar vídeo original</strong><small>Disponível desde já, sem esperar a dublagem.</small></span><b>Baixar</b>
           </motion.a>}
-          <div className="voice-note"><span className="voice-note-icon">♪</span><span><strong>A voz do vídeo é mantida</strong><small>A dublagem usa a própria voz da pessoa como referência.</small></span></div>
+          {/* A legenda vem dos textos da dublagem, entao fica pronta antes do video final.
+              Deixar aqui permite baixa-la mesmo que o video ainda nao tenha sido montado. */}
+          {status.dub === "done" && (status.subtitles === "done" ? (
+            <motion.div className="subtitle-row" initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }}>
+              <span className="download-mini-icon">↓</span>
+              <span><strong>Legenda pronta</strong><small>Mesmo nome do vídeo, para o player reconhecer sozinho.</small></span>
+              <a href={downloads.subtitles}>.SRT</a>
+              <a href={downloads.transcriptTxt}>.TXT</a>
+            </motion.div>
+          ) : (
+            <motion.button type="button" className="subtitle-row is-action" onClick={generateSubtitles} disabled={busy} initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }}>
+              <span className="download-mini-icon">↓</span>
+              <span><strong>Gerar legenda</strong><small>Sai em português, na hora, sem esperar o vídeo.</small></span>
+              <b>{status.subtitles === "loading" ? "Gerando…" : "Gerar"}</b>
+            </motion.button>
+          ))}
+          <div className="mode-picker" role="radiogroup" aria-label="Modo de dublagem">
+            {MODES.map((mode) => (
+              <button
+                key={mode.id}
+                type="button"
+                role="radio"
+                aria-checked={dubMode === mode.id}
+                className={`mode-option ${dubMode === mode.id ? "is-selected" : ""}`}
+                onClick={() => setDubMode(mode.id)}
+                disabled={busy || status.dub === "done"}
+              >
+                <strong>{mode.title}</strong>
+                <small>{mode.detail}</small>
+              </button>
+            ))}
+          </div>
           {!videoReady && <button className="primary-button" onClick={dubVideo} disabled={busy || status.job !== "done"}>{busy ? <><motion.i className="button-spinner" animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: .8, ease: "linear" }} /> {label}</> : <>{label}<span>→</span></>}</button>}
           {busy && <motion.div className="processing" initial={{ opacity: 0 }} animate={{ opacity: 1 }}><i /><span>{status.dub === "loading" ? "Traduzindo, limpando e recriando a voz. Isso pode levar alguns minutos." : "Não feche esta página. Seu progresso será recuperado ao voltar."}</span></motion.div>}
         </motion.section>}</AnimatePresence>
@@ -355,15 +391,7 @@ export default function App() {
                 Abrir vídeo <span>▶</span>
               </motion.button>
             )}
-            {status.subtitles === "done" ? (
-              <>
-                <a href={downloads.subtitles}>Legenda .SRT <span>↓</span></a>
-                <a href={downloads.transcriptTxt}>Transcrição .TXT <span>↓</span></a>
-              </>
-            ) : (
-              <button onClick={generateSubtitles} disabled={busy}>{status.subtitles === "loading" ? <><motion.i className="button-spinner dark" animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: .8, ease: "linear" }} /> Gerando legenda…</> : <>Gerar legenda <span>→</span></>}</button>
-            )}
-            <a href={downloads.original}>Vídeo original <span>↓</span></a>
+            {/* Legenda e video original ficam no cartao de cima, disponiveis antes daqui. */}
           </div>
           {status.subtitles === "done" && subtitleSegments.length > 0 && (
             <motion.div className="transcript" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>

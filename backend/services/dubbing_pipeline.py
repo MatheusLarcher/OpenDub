@@ -18,6 +18,11 @@ REFERENCE_MIN_SECONDS = 3.0
 MIN_SPEECH_SAMPLES_RATIO = 0.15
 # Sobra tolerada antes de considerar que a fala invadiu a proxima.
 OVERLAP_TOLERANCE_S = 0.02
+# Quantos blocos o Seamless traduz por chamada no modo rapido.
+SEAMLESS_BATCH_SIZE = max(1, int(os.getenv("SEAMLESS_BATCH_SIZE", "4")))
+
+MODO_QUALIDADE = "qualidade"
+MODO_RAPIDO = "rapido"
 
 
 def _write_reference(job_id: str, clean_wav, chunks: List[vad.Chunk]):
@@ -39,16 +44,62 @@ def _write_reference(job_id: str, clean_wav, chunks: List[vad.Chunk]):
     return path, best
 
 
-def run_dub(job_id: str, preserve_original_voice: bool = True) -> List[Dict]:
+def _dub_rapido(job_id: str, prepared: List[Dict]) -> List[Dict]:
+    """Modo rapido: SeamlessM4T v2 traduz fala em fala, num modelo so.
+
+    Troca a etapa mais cara (gerar a voz clonada e conferir cada tomada) por uma unica
+    passagem do Seamless. Em compensacao a voz e sintetica e fixa, em 16 kHz, e nao a
+    voz da pessoa. O reconhecimento e a traducao continuam rodando, para a legenda sair
+    igual nos dois modos.
+
+    Devolve o mesmo formato de ``tts.synthesize_blocks``, entao a montagem da timeline
+    nao muda.
+    """
+    from backend.services import s2st
+
+    blocos_dir = jobs.job_dir(job_id) / "tts_blocks"
+    blocos_dir.mkdir(exist_ok=True)
+    resultados: List[Dict] = []
+    total_lotes = (len(prepared) + SEAMLESS_BATCH_SIZE - 1) // SEAMLESS_BATCH_SIZE
+    for inicio in range(0, len(prepared), SEAMLESS_BATCH_SIZE):
+        lote = prepared[inicio : inicio + SEAMLESS_BATCH_SIZE]
+        audios = [vad.load_16k_mono(item["path"]).numpy() for item in lote]
+        traduzidos, taxa = s2st.translate_chunks(audios, sample_rate=vad.VAD_SAMPLE_RATE)
+        for deslocamento, audio in enumerate(traduzidos):
+            indice = inicio + deslocamento
+            destino = blocos_dir / f"bloco_{indice:03d}_rapido.wav"
+            media.write_wav(destino, torch.from_numpy(audio)[None, :], taxa)
+            resultados.append(
+                {
+                    "path": str(destino),
+                    "duration_s": len(audio) / taxa,
+                    "sample_rate": taxa,
+                    # Sem clonagem nao ha tomada para conferir: o Seamless nao colapsa
+                    # como o TTS, entao nao existe o laco de repeticao aqui.
+                    "fidelidade": 1.0,
+                    "tentativas": 1,
+                }
+            )
+        print(f"[dub] lote {inicio // SEAMLESS_BATCH_SIZE + 1}/{total_lotes} traduzido")
+    s2st.unload_model()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    return resultados
+
+
+def run_dub(job_id: str, modo: str = MODO_QUALIDADE) -> List[Dict]:
     """Dubla o video em cascata: reconhece a fala, traduz e recria a voz.
 
     Cada bloco volta para o MESMO timestamp em que a pessoa falou no original. O video
     nunca e retimado; quando a frase em portugues fica mais longa que a janela, so a
     voz acelera um pouco (tom preservado), ate o teto de MAX_DUB_SPEEDUP.
 
-    ``preserve_original_voice`` existe por compatibilidade: a clonagem agora e nativa
-    do TTS e sempre ativa.
+    ``modo`` escolhe entre "qualidade" (padrao: reconhece, traduz e recria a voz da
+    pessoa) e "rapido" (SeamlessM4T v2 traduz fala em fala, cerca de tres vezes mais
+    rapido, com voz sintetica fixa).
     """
+    if modo not in {MODO_QUALIDADE, MODO_RAPIDO}:
+        raise ValueError(f"modo invalido: {modo}")
     vocals_path, _instrumental_path = separation.separate(job_id)
     # A separacao e pesada em VRAM e nada depois dela precisa do Demucs carregado.
     separation.unload_model()
@@ -119,8 +170,12 @@ def run_dub(job_id: str, preserve_original_voice: bool = True) -> List[Dict]:
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
-    print("[dub] gerando a voz em portugues")
-    vozes = tts.synthesize_blocks(job_id, reference_path, traducoes)
+    if modo == MODO_RAPIDO:
+        print("[dub] modo rapido: traduzindo a fala direto com o Seamless")
+        vozes = _dub_rapido(job_id, prepared)
+    else:
+        print("[dub] gerando a voz em portugues")
+        vozes = tts.synthesize_blocks(job_id, reference_path, traducoes)
 
     sample_rate = next(
         (item["sample_rate"] for item in vozes if item["path"] and item["sample_rate"]), 24000

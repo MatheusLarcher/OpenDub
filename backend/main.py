@@ -4,6 +4,7 @@ import shutil
 import sys
 from threading import Lock
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlparse
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -45,6 +46,9 @@ class YoutubeRequest(BaseModel):
 
 class JobRequest(BaseModel):
     job_id: str
+    # "qualidade" recria a voz da pessoa; "rapido" usa o Seamless, ~3x mais rapido,
+    # com voz sintetica fixa.
+    modo: Literal["qualidade", "rapido"] = "qualidade"
 
 
 class SubtitlesRequest(BaseModel):
@@ -146,7 +150,14 @@ def process_youtube(payload: YoutubeRequest):
             status_code=500,
             detail="Nao foi possivel preparar esse video. Tente novamente."
         ) from exc
-    jobs.save_job_meta(job_id, {"media_path": str(media_file), "source_type": "youtube"})
+    jobs.save_job_meta(
+        job_id,
+        {
+            "media_path": str(media_file),
+            "source_type": "youtube",
+            "original_name": media_file.stem,
+        },
+    )
     return {"job_id": job_id, "media_path": str(media_file), "source_type": "youtube"}
 
 
@@ -175,7 +186,16 @@ async def process_upload(file: UploadFile = File(...)):
             status_code=500,
             detail="Nao foi possivel salvar esse video. Confira o espaco em disco e tente de novo."
         ) from exc
-    jobs.save_job_meta(job_id, {"media_path": str(target_path), "source_type": "upload"})
+    # O arquivo e gravado como "upload.<ext>", entao o nome escolhido pelo usuario
+    # precisa ser guardado a parte para batizar os downloads depois.
+    jobs.save_job_meta(
+        job_id,
+        {
+            "media_path": str(target_path),
+            "source_type": "upload",
+            "original_name": Path(file.filename or "").stem,
+        },
+    )
     return {"job_id": job_id, "media_path": str(target_path), "source_type": "upload"}
 
 
@@ -199,7 +219,7 @@ def dub(payload: JobRequest):
         )
     try:
         _active_dub_job_id = payload.job_id
-        segments = dubbing_pipeline.run_dub(payload.job_id)
+        segments = dubbing_pipeline.run_dub(payload.job_id, modo=payload.modo)
     finally:
         _active_dub_job_id = None
         _dub_lock.release()
@@ -258,7 +278,9 @@ def export_transcription(job_id: str):
     path = jobs.transcription_path(job_id)
     if not path.exists():
         raise HTTPException(status_code=404, detail="Legenda ainda nao gerada")
-    return FileResponse(path, media_type="application/json", filename="transcription.json")
+    return FileResponse(
+        path, media_type="application/json", filename=f"{jobs.display_name(job_id)}.json"
+    )
 
 
 @app.get("/export/subtitles/{job_id}")
@@ -266,7 +288,10 @@ def export_subtitles(job_id: str):
     path = jobs.subtitles_srt_path(job_id)
     if not path.exists():
         raise HTTPException(status_code=404, detail="Legenda ainda nao gerada")
-    return FileResponse(path, media_type="text/plain", filename="subtitles.srt")
+    # Mesmo nome base do video: o player casa legenda e video automaticamente.
+    return FileResponse(
+        path, media_type="text/plain", filename=f"{jobs.display_name(job_id)}.srt"
+    )
 
 
 @app.get("/export/transcript-txt/{job_id}")
@@ -274,7 +299,9 @@ def export_transcript_txt(job_id: str):
     path = jobs.transcript_txt_path(job_id)
     if not path.exists():
         raise HTTPException(status_code=404, detail="Legenda ainda nao gerada")
-    return FileResponse(path, media_type="text/plain", filename="transcript.txt")
+    return FileResponse(
+        path, media_type="text/plain", filename=f"{jobs.display_name(job_id)}.txt"
+    )
 
 
 @app.get("/export/audio/{job_id}")
@@ -282,7 +309,9 @@ def export_audio(job_id: str):
     path = jobs.dubbed_audio_path(job_id)
     if not path.exists():
         raise HTTPException(status_code=404, detail="Audio dublado ainda nao gerado")
-    return FileResponse(path, media_type="audio/wav", filename="dubbed.wav")
+    return FileResponse(
+        path, media_type="audio/wav", filename=f"{jobs.display_name(job_id)}_dublado.wav"
+    )
 
 
 @app.get("/export/video/{job_id}")
@@ -290,7 +319,9 @@ def export_video(job_id: str):
     path = jobs.dubbed_video_path(job_id)
     if not path.exists():
         raise HTTPException(status_code=404, detail="Video dublado ainda nao gerado")
-    return FileResponse(path, media_type="video/mp4", filename="dubbed.mp4")
+    return FileResponse(
+        path, media_type="video/mp4", filename=f"{jobs.display_name(job_id)}_dublado.mp4"
+    )
 
 
 @app.get("/export/original/{job_id}")
@@ -298,7 +329,11 @@ def export_original_video(job_id: str):
     path = jobs.resolve_media_path(job_id)
     if not path.exists():
         raise HTTPException(status_code=404, detail="Video original nao encontrado")
-    return FileResponse(path, media_type="video/mp4", filename="original.mp4")
+    return FileResponse(
+        path,
+        media_type="video/mp4",
+        filename=f"{jobs.display_name(job_id)}{path.suffix or '.mp4'}",
+    )
 
 
 if __name__ == "__main__":

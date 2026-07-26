@@ -113,6 +113,26 @@ def load_job_meta(job_id: str) -> Dict:
     return load_json(path)
 
 
+# Caracteres que o Windows nao aceita em nome de arquivo.
+_INVALID_FILENAME_CHARS = '<>:"/\\|?*'
+
+
+def display_name(job_id: str) -> str:
+    """Nome base do video, usado para batizar todos os downloads do job.
+
+    Vem do titulo real do video (YouTube) ou do nome do arquivo enviado, para o usuario
+    reconhecer o que baixou em vez de achar varios "dubbed.mp4" na pasta Downloads.
+    """
+    meta = load_job_meta(job_id)
+    nome = meta.get("original_name") or ""
+    if not nome:
+        media_path = meta.get("media_path")
+        nome = Path(media_path).stem if media_path else ""
+    nome = "".join(c for c in nome if c not in _INVALID_FILENAME_CHARS).strip(" .")
+    # Nome muito longo estoura o limite de caminho do Windows quando somado a pasta.
+    return (nome[:120] or "video").strip()
+
+
 def resolve_media_path(job_id: str) -> Path:
     meta = load_job_meta(job_id)
     media_path = meta.get("media_path")
