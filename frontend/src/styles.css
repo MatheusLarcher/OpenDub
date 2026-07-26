@@ -55,7 +55,11 @@ h1 em { font-family: "Playfair Display", Georgia, serif; font-weight: 600; color
 
 /* Notificacoes: canto superior direito, some sozinho, nunca empurra o conteudo. */
 .toaster { position: fixed; top: 16px; right: 16px; z-index: 100; display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
-.toast { width: 320px; max-width: calc(100vw - 32px); overflow: hidden; border: 1px solid #e1e3db; border-left: 4px solid var(--toast-cor); border-radius: 12px; background: #fffefa; box-shadow: 0 12px 30px rgba(32, 51, 42, .14); pointer-events: auto; }
+.toast { width: 320px; max-width: calc(100vw - 32px); overflow: hidden; border: 1px solid #e1e3db; border-left: 4px solid var(--toast-cor); border-radius: 12px; background: #fffefa; box-shadow: 0 12px 30px rgba(32, 51, 42, .14); pointer-events: auto; animation: toast-in .25s ease-out forwards; }
+.toast.is-leaving { animation: toast-out .22s ease-in forwards; pointer-events: none; }
+@keyframes toast-in { from { opacity: 0; transform: translateX(28px) scale(.97); } to { opacity: 1; transform: translateX(0) scale(1); } }
+@keyframes toast-out { from { opacity: 1; transform: translateX(0) scale(1); } to { opacity: 0; transform: translateX(28px) scale(.97); } }
+@keyframes toast-bar { from { width: 100%; } to { width: 0%; } }
 .toast-body { display: flex; align-items: flex-start; gap: 10px; padding: 11px 13px; }
 .toast-icon { width: 18px; height: 18px; flex-shrink: 0; margin-top: 1px; color: var(--toast-cor); }
 .toast-body p { flex: 1; margin: 0; font-size: 13px; line-height: 1.35; color: #17221e; }

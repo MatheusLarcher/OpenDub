@@ -62,11 +62,17 @@ export default function App() {
     window.localStorage.setItem(SESSION_KEY, JSON.stringify({ jobId, sourceType }));
   }, [jobId, sourceType]);
 
+  // Todo download avisa onde o arquivo foi salvo -- antes o usuario clicava em baixar e
+  // nada na tela indicava que o arquivo tinha chegado, nem onde.
   useEffect(() => {
-    if (!window.app?.onVideoDownloadComplete) return;
-    window.app.onVideoDownloadComplete((filePath) => {
-      setDubbedVideoPath(filePath);
-      toast.success("Vídeo dublado salvo na pasta Downloads.");
+    if (!window.app?.onDownloadDone) return;
+    window.app.onDownloadDone(({ ok, path, name, folder, isDubbedVideo }) => {
+      if (!ok) {
+        toast.error(`O download de ${name} não foi concluído. Tente de novo.`);
+        return;
+      }
+      if (isDubbedVideo) setDubbedVideoPath(path);
+      toast.success(`${name} salvo na pasta ${folder}.`);
     });
   }, []);
 

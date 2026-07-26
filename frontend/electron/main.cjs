@@ -89,12 +89,18 @@ function createWindow() {
       counter += 1;
     }
     item.setSavePath(target);
-    // O botao "Abrir video" so vale para o video dublado.
+    // O botao "Abrir video" so vale para o video dublado; o aviso de "salvo em" vale
+    // para todos, senao o usuario clica em baixar e nada indica que o arquivo chegou.
     const isDubbedVideo = item.getURL().includes("/export/video/");
     item.once("done", (_doneEvent, state) => {
-      if (state === "completed" && isDubbedVideo && !win.isDestroyed()) {
-        win.webContents.send("video-download-complete", item.getSavePath());
-      }
+      if (win.isDestroyed()) return;
+      win.webContents.send("download-done", {
+        ok: state === "completed",
+        path: item.getSavePath(),
+        name: path.basename(item.getSavePath()),
+        folder: path.basename(downloadsDir),
+        isDubbedVideo
+      });
     });
   });
 
