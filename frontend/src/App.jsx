@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
+import Toaster from "./Toaster";
+import { toast } from "./toast";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:5501";
 const SESSION_KEY = "dublar-video:active-job";
@@ -67,7 +69,10 @@ export default function App() {
 
   useEffect(() => {
     if (!window.app?.onVideoDownloadComplete) return;
-    window.app.onVideoDownloadComplete((filePath) => setDubbedVideoPath(filePath));
+    window.app.onVideoDownloadComplete((filePath) => {
+      setDubbedVideoPath(filePath);
+      toast.success("Vídeo dublado salvo na pasta Downloads.");
+    });
   }, []);
 
   useEffect(() => {
@@ -87,7 +92,11 @@ export default function App() {
       try {
         const response = await fetch(`${API_BASE}/jobs/${jobId}/status`);
         if (response.status === 404) {
-          if (!cancelled) { window.localStorage.removeItem(SESSION_KEY); setJobId(""); }
+          if (!cancelled) {
+            window.localStorage.removeItem(SESSION_KEY);
+            setJobId("");
+            toast.info("O vídeo anterior não está mais disponível. Comece um novo.");
+          }
           return;
         }
         if (!response.ok) throw new Error(await response.text());
@@ -165,6 +174,7 @@ export default function App() {
     const failure = await window.app.openPath(dubbedVideoPath);
     if (failure) {
       setErrorMessage(`Não foi possível abrir o vídeo: ${failure}`);
+      toast.error("Não foi possível abrir o vídeo neste computador.");
       return;
     }
     setVideoOpened(true);
@@ -179,6 +189,7 @@ export default function App() {
       : VIDEO_EXTENSIONS.some((extension) => file.name.toLowerCase().endsWith(extension));
     if (!looksLikeVideo) {
       setErrorMessage("Escolha um arquivo de vídeo.");
+      toast.warning("Esse arquivo não é um vídeo.");
       return;
     }
     setUploadFile(file);
@@ -214,9 +225,12 @@ export default function App() {
       setJobId(data.job_id);
       setSourceType(data.source_type || (uploadFile ? "upload" : "youtube"));
       setStatus((current) => ({ ...current, job: "done" }));
+      toast.success("Vídeo pronto para dublar.");
     } catch (error) {
-      setErrorMessage(describeError(error, "Não foi possível preparar o vídeo."));
+      const motivo = describeError(error, "Não foi possível preparar o vídeo.");
+      setErrorMessage(motivo);
       setStatus((current) => ({ ...current, job: "error" }));
+      toast.error(motivo);
     } finally {
       actionInFlight.current = false;
       setBusy(false);
@@ -246,9 +260,12 @@ export default function App() {
       });
       if (!videoResponse.ok) throw new Error(await videoResponse.text());
       setStatus((current) => ({ ...current, video: "done" }));
+      toast.success("Dublagem concluída. O vídeo está pronto para baixar.");
     } catch (error) {
-      setErrorMessage(describeError(error, "Não foi possível dublar o vídeo."));
+      const motivo = describeError(error, "Não foi possível dublar o vídeo.");
+      setErrorMessage(motivo);
       setStatus((current) => ({ ...current, dub: "error", video: "error" }));
+      toast.error(motivo);
     } finally {
       actionInFlight.current = false;
       setBusy(false);
@@ -269,9 +286,12 @@ export default function App() {
       const data = await response.json();
       setSubtitleSegments(data.segments || []);
       setStatus((current) => ({ ...current, subtitles: "done" }));
+      toast.success(`Legenda pronta com ${(data.segments || []).length} falas.`);
     } catch (error) {
-      setErrorMessage(describeError(error, "Não foi possível gerar a legenda."));
+      const motivo = describeError(error, "Não foi possível gerar a legenda.");
+      setErrorMessage(motivo);
       setStatus((current) => ({ ...current, subtitles: "error" }));
+      toast.error(motivo);
     } finally {
       actionInFlight.current = false;
       setBusy(false);
@@ -409,6 +429,7 @@ export default function App() {
         </motion.section>}</AnimatePresence>
         <footer className="app-footer">Feito por <a href="https://larchertech.com" target="_blank" rel="noreferrer">LarcherTech AI</a></footer>
       </section>
+      <Toaster />
       <aside className="visual-panel"><div className="orb orb-one" /><div className="orb orb-two" /><div className="wave-card"><span>traduzindo vozes</span><div className="wave">{Array.from({ length: 28 }, (_, i) => <i key={i} style={{ "--h": `${20 + ((i * 37) % 70)}%` }} />)}</div><small>sem perder o ritmo do vídeo</small></div><p>Som original.<br />Nova língua.</p></aside>
     </main>
   );

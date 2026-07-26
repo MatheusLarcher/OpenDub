@@ -58,3 +58,15 @@ h1 em { font-family: "Playfair Display", Georgia, serif; font-weight: 600; color
 .app-footer { margin-top: 14px; font-size: 11px; color: #9aa59d; text-align: center; }.app-footer a { color: #6e8074; text-decoration: underline; }
 @media (max-width: 820px) { .app-shell { grid-template-columns: 1fr; }.visual-panel { min-height: 210px; }.visual-panel > p { bottom: 15px; left: 30px; font-size: 36px; }.wave-card { display: none; } }
 @media (max-width: 420px) { .studio { padding: 18px 16px 22px; }.source-card, .workflow-card, .result-card { padding: 16px; }.downloads { grid-template-columns: 1fr; }.downloads .download-primary { grid-column: auto; } }
+
+/* Notificacoes: canto superior direito, some sozinho, nunca empurra o conteudo. */
+.toaster { position: fixed; top: 16px; right: 16px; z-index: 100; display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
+.toast { width: 320px; max-width: calc(100vw - 32px); overflow: hidden; border: 1px solid #e1e3db; border-left: 4px solid var(--toast-cor); border-radius: 12px; background: #fffefa; box-shadow: 0 12px 30px rgba(32, 51, 42, .14); pointer-events: auto; }
+.toast-body { display: flex; align-items: flex-start; gap: 10px; padding: 11px 13px; }
+.toast-icon { width: 18px; height: 18px; flex-shrink: 0; margin-top: 1px; color: var(--toast-cor); }
+.toast-body p { flex: 1; margin: 0; font-size: 13px; line-height: 1.35; color: #17221e; }
+.toast-body button { flex-shrink: 0; padding: 2px; border: 0; border-radius: 6px; background: transparent; color: #a3aca6; line-height: 0; transition: color .2s, background .2s; }
+.toast-body button svg { width: 13px; height: 13px; }
+.toast-body button:hover { color: #6c766f; background: #f0f2ed; }
+.toast-bar { display: block; height: 2px; }
+@media (max-width: 560px) { .toaster { top: 10px; right: 10px; left: 10px; } .toast { width: auto; } }
