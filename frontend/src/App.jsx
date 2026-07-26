@@ -66,8 +66,8 @@ export default function App() {
   // Todo download avisa onde o arquivo foi salvo -- antes o usuario clicava em baixar e
   // nada na tela indicava que o arquivo tinha chegado, nem onde.
   useEffect(() => {
-    if (!window.app?.onDownloadDone) return;
-    window.app.onDownloadDone(({ ok, path, name, folder, isDubbedVideo }) => {
+    if (!window.app?.onDownloadDone) return undefined;
+    const cancelar = window.app.onDownloadDone(({ ok, path, name, folder, isDubbedVideo }) => {
       if (!ok) {
         toast.error(`O download de ${name} não foi concluído. Tente de novo.`);
         return;
@@ -76,6 +76,7 @@ export default function App() {
       setUltimoDownload(path);
       toast.success(`${name} salvo na pasta ${folder}.`);
     });
+    return () => { if (typeof cancelar === "function") cancelar(); };
   }, []);
 
   useEffect(() => {

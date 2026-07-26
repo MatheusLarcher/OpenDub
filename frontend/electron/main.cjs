@@ -30,7 +30,7 @@ async function hasNvidiaDriver() {
   try { await run("nvidia-smi.exe", ["-L"]); return true; } catch { return false; }
 }
 
-async function startBackend(runtime, dataDir) {
+async function startBackend(runtime, dataDir, logFile) {
   backendProcess = spawn(runtime.python, ["-m", "uvicorn", "backend.main:app", "--host", "127.0.0.1", "--port", "5501"], {
     cwd: process.resourcesPath,
     windowsHide: true,
@@ -44,7 +44,15 @@ async function startBackend(runtime, dataDir) {
       OPENDUB_TTS_PYTHON: runtime.ttsPython
     }
   });
-  backendProcess.on("exit", () => { backendProcess = undefined; });
+  // O stdout/stderr do backend PRECISA ser consumido. Sem ninguem lendo, o buffer do pipe
+  // (64 KB no Windows) enche e o proximo print bloqueia o processo inteiro -- foi o que
+  // travava o download do YouTube perto do fim: o yt-dlp imprime progresso sem parar e o
+  // backend congelava no meio do arquivo, sem erro e sem timeout. De quebra, o log em
+  // arquivo da onde olhar quando algo falhar no computador do usuario.
+  const log = fs.createWriteStream(logFile, { flags: "a" });
+  backendProcess.stdout.pipe(log);
+  backendProcess.stderr.pipe(log);
+  backendProcess.on("exit", () => { backendProcess = undefined; log.end(); });
   await waitForBackend();
 }
 
@@ -148,7 +156,7 @@ app.whenReady().then(async () => {
       });
     }
     report("Iniciando o estúdio", "Só mais um instante.", 100);
-    await startBackend(runtime, dataDir);
+    await startBackend(runtime, dataDir, path.join(app.getPath("userData"), "backend.log"));
     createWindow();
     loading.close();
   } catch (error) {

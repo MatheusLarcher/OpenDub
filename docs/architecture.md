@@ -20,6 +20,14 @@ Em desenvolvimento, a pagina roda em `http://localhost:5500` e a API em
 `http://localhost:5501`. No aplicativo Electron, a API e iniciada pelo processo
 principal antes de a janela da interface abrir.
 
+A saida do backend e gravada em `backend.log`, dentro da pasta de dados do aplicativo
+(`app.getPath("userData")`). Nao e so conveniencia de diagnostico: um processo filho com
+`stdout` em pipe **bloqueia** quando o buffer do sistema (64 KB no Windows) enche e
+ninguem le. Era o que travava o download do YouTube perto do fim -- o `yt-dlp` imprime
+progresso continuamente e o backend congelava no meio da escrita, sem erro e sem timeout,
+com a tela presa em "Preparando video...". Qualquer processo filho de vida longa com saida
+verbosa precisa ter `stdout` e `stderr` consumidos.
+
 ## Fluxo para quem usa a pagina
 
 1. Cole um link do YouTube ou arraste/escolha um arquivo de video.
@@ -159,6 +167,11 @@ backend, e o arquivo recusado por nao ser video.
 Os downloads dizem **onde** o arquivo foi salvo (`<arquivo> salvo na pasta Downloads`).
 O processo principal manda `download-done` para todo download, com nome e pasta; antes
 havia um evento so para o video dublado, e sem o caminho.
+
+As pontes de `ipcRenderer.on` expostas no `contextBridge` devolvem uma funcao de cancelar,
+e quem registra chama essa funcao no cleanup do efeito. Sem isso, cada remontagem deixava
+um listener antigo vivo -- com `React.StrictMode` o efeito monta duas vezes e cada download
+mostrava a notificacao duplicada.
 
 ## Configuracao e variaveis importantes
 
