@@ -52,6 +52,17 @@ const ICON_PATH = path.join(__dirname, "..", "build", "icon.ico");
 
 ipcMain.handle("open-path", (_event, filePath) => shell.openPath(filePath));
 
+// Abrir a pasta de downloads sem o usuario precisar procurar. Com um arquivo conhecido,
+// showItemInFolder abre a pasta JA com ele selecionado, o que responde direto a pergunta
+// "onde foi salvo"; sem arquivo, abre a pasta mesmo.
+ipcMain.handle("show-in-folder", (_event, filePath) => {
+  if (filePath && fs.existsSync(filePath)) {
+    shell.showItemInFolder(filePath);
+    return "";
+  }
+  return shell.openPath(app.getPath("downloads"));
+});
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 1200,

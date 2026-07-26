@@ -50,6 +50,7 @@ export default function App() {
   const [dubFakeProgress, setDubFakeProgress] = useState(0);
   const [videoFakeProgress, setVideoFakeProgress] = useState(0);
   const [dubbedVideoPath, setDubbedVideoPath] = useState(null);
+  const [ultimoDownload, setUltimoDownload] = useState(null);
   const [videoOpened, setVideoOpened] = useState(false);
   const fileInput = useRef(null);
   const actionInFlight = useRef(false);
@@ -72,6 +73,7 @@ export default function App() {
         return;
       }
       if (isDubbedVideo) setDubbedVideoPath(path);
+      setUltimoDownload(path);
       toast.success(`${name} salvo na pasta ${folder}.`);
     });
   }, []);
@@ -162,6 +164,7 @@ export default function App() {
     setStatus(initialStatus);
     setErrorMessage("");
     setDubbedVideoPath(null);
+    setUltimoDownload(null);
     setVideoOpened(false);
     // Sem limpar aqui, a transcricao e o arquivo do video anterior ficavam no estado e
     // podiam reaparecer no proximo video.
@@ -179,6 +182,12 @@ export default function App() {
       return;
     }
     setVideoOpened(true);
+  };
+
+  const abrirPasta = async () => {
+    if (!window.app?.showInFolder) return;
+    const falha = await window.app.showInFolder(ultimoDownload);
+    if (falha) toast.error("Não foi possível abrir a pasta de downloads.");
   };
 
   const chooseFile = (file) => {
@@ -396,6 +405,19 @@ export default function App() {
               >
                 Abrir vídeo <span>▶</span>
               </motion.button>
+            )}
+            {window.app?.showInFolder && (
+              <button type="button" className="open-folder-button" onClick={abrirPasta}>
+                <span className="folder-icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M3 7.5A1.5 1.5 0 014.5 6h4l2 2.5h7A1.5 1.5 0 0119 10v7a1.5 1.5 0 01-1.5 1.5h-13A1.5 1.5 0 013 17V7.5Z" />
+                  </svg>
+                </span>
+                <span>
+                  <strong>Abrir a pasta dos arquivos</strong>
+                  <small>{ultimoDownload ? "Abre já com o último arquivo selecionado." : "Mostra onde os downloads são salvos."}</small>
+                </span>
+              </button>
             )}
             {/* Legenda e video original ficam no cartao de cima, disponiveis antes daqui. */}
           </div>
