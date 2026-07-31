@@ -8,6 +8,10 @@ const path = require("path");
 const MINIFORGE_URL = "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Windows-x86_64.exe";
 const TORCH_INDEX = "https://download.pytorch.org/whl/cu130";
 const TORCH_PACKAGES = ["torch==2.9.1+cu130", "torchaudio==2.9.1+cu130", "torchcodec==0.15.0+cu130"];
+// Instalados pelo conda no ambiente principal. Entram na assinatura do ambiente logo
+// abaixo: sem isso, mudar esta lista nao chegaria em quem ja tem o app instalado -- o
+// marcador continuaria batendo e a etapa inteira seria pulada no update.
+const CONDA_PACKAGES = ["ffmpeg", "deno"];
 
 // O reconhecimento de fala e a geracao de voz exigem versoes incompativeis do
 // transformers (>=5.10 e ==5.2.0). Cada um roda em um venv proprio criado sobre o
@@ -170,10 +174,14 @@ async function ensureRuntime({ runtimeDir, backendDir, report }) {
   const requirementsPath = path.join(backendDir, "requirements.txt");
   const requirements = await fs.readFile(requirementsPath, "utf8");
   const backendMarker = path.join(runtimeDir, ".backend-ready");
-  const backendExpected = fingerprint([requirements, ...TORCH_PACKAGES, TORCH_INDEX]);
+  const backendExpected = fingerprint([requirements, ...TORCH_PACKAGES, TORCH_INDEX, ...CONDA_PACKAGES]);
   if ((await readMarker(backendMarker)) !== backendExpected) {
     report("Instalando dependências", "Esta é a etapa mais longa da primeira abertura.", PROGRESS.installBackendDeps);
-    await run(conda, ["install", "--prefix", path.join(runtimeDir, "backend"), "-c", "conda-forge", "ffmpeg", "-y"]);
+    // O deno acompanha o ffmpeg porque o yt-dlp precisa de um interpretador JavaScript:
+    // sem ele, a extracao do YouTube cai no caminho descontinuado, alguns formatos somem
+    // e a verificacao de "nao sou um robo" passa a barrar o download com muito mais
+    // frequencia. O yt-dlp procura o deno sozinho no PATH, entao basta estar instalado.
+    await run(conda, ["install", "--prefix", path.join(runtimeDir, "backend"), "-c", "conda-forge", ...CONDA_PACKAGES, "-y"]);
     await pip(python, ["install", "--upgrade", "pip"]);
     await pip(python, ["install", "--index-url", TORCH_INDEX, ...TORCH_PACKAGES]);
     await pip(python, ["install", "-r", requirementsPath]);

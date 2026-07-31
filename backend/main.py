@@ -113,6 +113,23 @@ def process_youtube(payload: YoutubeRequest):
                         "sido removido). Tente outro link ou envie o arquivo pelo upload."
                     )
                 ) from exc
+            # Baixar muitos videos seguidos faz o YouTube limitar a conexao e passar a
+            # pedir verificacao de "nao sou um robo". Nesse caso NAO adianta tentar de
+            # novo em seguida (era o que a mensagem generica sugeria, e so piorava): o
+            # bloqueio e da conexao, nao do video, e cai sozinho depois de um tempo.
+            if any(
+                marker in message
+                for marker in ("sign in to confirm", "not a bot", "too many requests", "429")
+            ):
+                raise HTTPException(
+                    status_code=429,
+                    detail=(
+                        "O YouTube bloqueou os downloads desta conexao por excesso de "
+                        "pedidos. Isso nao e um problema do video nem do aplicativo, e "
+                        "costuma liberar sozinho em algumas horas. Enquanto isso, baixe o "
+                        "video pelo navegador e envie o arquivo pelo botao de upload."
+                    )
+                ) from exc
             raise HTTPException(
                 status_code=502,
                 detail=(
